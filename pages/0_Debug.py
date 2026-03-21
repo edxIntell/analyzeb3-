@@ -1,8 +1,8 @@
 import streamlit as st
 import requests
+import pandas as pd
 
 st.title("Debug — Teste de conexão")
-
 ticker = st.text_input("Ticker", value="VALE3")
 
 if st.button("Testar brapi.dev"):
@@ -15,23 +15,27 @@ if st.button("Testar brapi.dev"):
         results = data.get("results", [])
         if results:
             r = results[0]
-            hist = r.get("historicalDataPrice", [])
-            st.success(f"Brapi OK — {len(hist)} candles recebidos")
-            st.json(r.get("regularMarketPrice"))
+            hist = r.get("historicalDataPrice") or []
+            st.success(f"Brapi OK — {len(hist)} candles")
+            if hist:
+                st.write("Primeiro candle (estrutura):", hist[0])
+                st.write("Último candle:", hist[-1])
+                rows = []
+                for h in hist:
+                    close_val = h.get("close") or h.get("adjustedClose")
+                    if close_val:
+                        try:
+                            date_val = pd.to_datetime(h["date"], unit="s") if isinstance(h["date"], (int,float)) else pd.to_datetime(h["date"])
+                            rows.append({"Date": date_val, "Close": close_val})
+                        except: pass
+                if rows:
+                    df = pd.DataFrame(rows).set_index("Date")
+                    st.success(f"DataFrame OK — {len(df)} linhas")
+                    st.dataframe(df.tail(5))
+                else:
+                    st.error("Nenhuma linha válida no histórico")
         else:
-            st.error("Brapi retornou vazio")
+            st.error("Sem results")
             st.json(data)
     except Exception as e:
-        st.error(f"Brapi falhou: {e}")
-
-if st.button("Testar yfinance"):
-    try:
-        import yfinance as yf
-        df = yf.download(ticker + ".SA", period="1mo", progress=False, threads=False)
-        if df is not None and not df.empty:
-            st.success(f"yfinance OK — {len(df)} linhas")
-            st.dataframe(df.tail(3))
-        else:
-            st.error("yfinance retornou vazio")
-    except Exception as e:
-        st.error(f"yfinance falhou: {e}")
+        st.error(f"Erro: {e}")
