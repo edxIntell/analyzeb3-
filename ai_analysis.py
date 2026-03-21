@@ -94,7 +94,20 @@ def build_analysis_context(ticker: str, name: str, info: dict, df, scores: list)
             "crescimento_lucro_pct": _safe_float((info.get("earningsGrowth") or 0) * 100, 1),
             "beta": _safe_float(info.get("beta"), 2),
         },
-        "frameworks": {s["name"]: {"score": s["score"], "criterios": s["criteria"]} for s in scores},
+        "frameworks": {
+            s["name"]: {
+                "score": int(s["score"]),
+                "criterios": [
+                    {
+                        "label": c["label"],
+                        "pass": bool(c["pass"]) if c["pass"] is not None else None,
+                        "note": c["note"]
+                    }
+                    for c in s["criteria"]
+                ]
+            }
+            for s in scores
+        },
         "cdi_referencia_pct": 10.5,
     }
     return ctx
