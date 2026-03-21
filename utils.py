@@ -213,19 +213,26 @@ def fetch_price_history(ticker: str, period: str = "1y") -> pd.DataFrame:
         resp = requests.get(url, timeout=15)
         data = resp.json()
         results = data.get("results", [])
-        if results and results[0].get("historicalDataPrice"):
-            hist = results[0]["historicalDataPrice"]
+        if results:
+            r = results[0]
+            hist = r.get("historicalDataPrice") or []
+            # Also try to get current price if history is short
             rows = []
             for h in hist:
-                if h.get("close") is not None:
-                    rows.append({
-                        "Date": pd.to_datetime(h["date"], unit="s"),
-                        "Open":   h.get("open"),
-                        "High":   h.get("high"),
-                        "Low":    h.get("low"),
-                        "Close":  h.get("close"),
-                        "Volume": h.get("volume", 0),
-                    })
+                close_val = h.get("close") or h.get("adjustedClose")
+                if close_val is not None:
+                    try:
+                        date_val = pd.to_datetime(h["date"], unit="s") if isinstance(h["date"], (int, float)) else pd.to_datetime(h["date"])
+                        rows.append({
+                            "Date":   date_val,
+                            "Open":   h.get("open") or close_val,
+                            "High":   h.get("high") or close_val,
+                            "Low":    h.get("low") or close_val,
+                            "Close":  close_val,
+                            "Volume": h.get("volume") or 0,
+                        })
+                    except Exception:
+                        continue
             if rows:
                 df = pd.DataFrame(rows).set_index("Date").sort_index()
                 df = df.dropna(subset=["Close"])
