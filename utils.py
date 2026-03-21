@@ -200,10 +200,9 @@ div[data-testid="stTextInput"] > div > div {
 
 # ─── DATA FETCHING ─────────────────────────────────────────────────────────────
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=60, show_spinner=False)
 def fetch_price_history(ticker: str, period: str = "1y") -> pd.DataFrame:
-    # Remove .SA suffix for brapi
-    symbol = ticker.replace(".SA", "")
+    symbol = ticker.upper().replace(".SA", "")
     period_map = {"6mo": "6mo", "1y": "1y", "2y": "2y", "3y": "3y"}
     range_param = period_map.get(period, "1y")
 
