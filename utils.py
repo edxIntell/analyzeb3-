@@ -202,47 +202,125 @@ div[data-testid="stTextInput"] > div > div {
 
 @st.cache_data(ttl=300)
 def fetch_price_history(ticker: str, period: str = "1y") -> pd.DataFrame:
+    # Remove .SA suffix for brapi
+    symbol = ticker.replace(".SA", "")
+    period_map = {"6mo": "6mo", "1y": "1y", "2y": "2y", "3y": "3y"}
+    range_param = period_map.get(period, "1y")
+
+    # Try brapi.dev first
     try:
-        df = yf.download(ticker, period=period, progress=False, threads=False, auto_adjust=True)
-        if df is None or df.empty:
-            return pd.DataFrame()
-        df = df.copy()
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        df.columns = [str(c) for c in df.columns]
-        df = df.dropna(subset=["Close"])
-        return df
+        url = f"{BRAPI_BASE}/quote/{symbol}?range={range_param}&interval=1d&fundamental=false"
+        resp = requests.get(url, timeout=15)
+        data = resp.json()
+        results = data.get("results", [])
+        if results and results[0].get("historicalDataPrice"):
+            hist = results[0]["historicalDataPrice"]
+            rows = []
+            for h in hist:
+                if h.get("close") is not None:
+                    rows.append({
+                        "Date": pd.to_datetime(h["date"], unit="s"),
+                        "Open":   h.get("open"),
+                        "High":   h.get("high"),
+                        "Low":    h.get("low"),
+                        "Close":  h.get("close"),
+                        "Volume": h.get("volume", 0),
+                    })
+            if rows:
+                df = pd.DataFrame(rows).set_index("Date").sort_index()
+                df = df.dropna(subset=["Close"])
+                return df
     except Exception:
-        return pd.DataFrame()
+        pass
+
+    # Fallback: yfinance
+    try:
+        import yfinance as yf
+        df = yf.download(ticker, period=period, progress=False, threads=False, auto_adjust=True)
+        if df is not None and not df.empty:
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+            df.columns = [str(c) for c in df.columns]
+            df = df.dropna(subset=["Close"])
+            return df
+    except Exception:
+        pass
+
+    return pd.DataFrame()
+
 
 @st.cache_data(ttl=3600)
 def fetch_fundamentals(ticker: str) -> dict:
+    symbol = ticker.replace(".SA", "")
+
+    # Try brapi fundamentals
     try:
+        url = f"{BRAPI_BASE}/quote/{symbol}?fundamental=true"
+        resp = requests.get(url, timeout=15)
+        data = resp.json()
+        results = data.get("results", [])
+        if results:
+            r = results[0]
+            info = {}
+            # Map brapi fields to yfinance-style keys
+            info["longName"]              = r.get("longName") or r.get("shortName", symbol)
+            info["shortName"]             = r.get("shortName", symbol)
+            info["sector"]                = r.get("sector", "")
+            info["industry"]              = r.get("industry", "")
+            info["marketCap"]             = r.get("marketCap")
+            info["trailingPE"]            = r.get("trailingPE")
+            info["forwardPE"]             = r.get("forwardPE")
+            info["priceToBook"]           = r.get("priceToBook")
+            info["enterpriseToEbitda"]    = r.get("enterpriseToEbitda")
+            info["enterpriseToRevenue"]   = r.get("enterpriseToRevenue")
+            info["returnOnEquity"]        = r.get("returnOnEquity")
+            info["returnOnAssets"]        = r.get("returnOnAssets")
+            info["profitMargins"]         = r.get("profitMargins")
+            info["grossMargins"]          = r.get("grossMargins")
+            info["dividendYield"]         = r.get("dividendYield")
+            info["payoutRatio"]           = r.get("payoutRatio")
+            info["debtToEquity"]          = r.get("debtToEquity")
+            info["revenueGrowth"]         = r.get("revenueGrowth")
+            info["earningsGrowth"]        = r.get("earningsGrowth")
+            info["beta"]                  = r.get("beta")
+            info["currentRatio"]          = r.get("currentRatio")
+            info["lastDividendValue"]     = r.get("dividendsPerShare")
+            info["longBusinessSummary"]   = r.get("longBusinessSummary", "")
+            info["priceToSalesTrailing12Months"] = r.get("priceToSalesTrailing12Months")
+            # Remove None values to avoid downstream issues
+            info = {k: v for k, v in info.items() if v is not None}
+            return info
+    except Exception:
+        pass
+
+    # Fallback: yfinance
+    try:
+        import yfinance as yf
         t = yf.Ticker(ticker)
-        info = t.info or {}
-        return info
+        return t.info or {}
     except Exception:
         return {}
 
+
 @st.cache_data(ttl=300)
 def fetch_benchmark_returns(period: str = "1y") -> dict:
-    tickers = {
-        "IBOV": "^BVSP",
-        "Ouro (BRL)": "GLD",
-        "Dólar": "BRL=X",
-        "S&P500": "^GSPC",
+    benchmarks = {
+        "IBOV":    ("^BVSP", "yf"),
+        "Ouro":    ("GLD",   "yf"),
+        "S&P500":  ("^GSPC", "yf"),
+        "Dólar":   ("BRL=X", "yf"),
     }
     results = {}
-    for name, sym in tickers.items():
+    for name, (sym, src) in benchmarks.items():
         try:
+            import yfinance as yf
             df = yf.download(sym, period=period, progress=False, threads=False, auto_adjust=True)
             if df is not None and not df.empty:
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(0)
                 close = df["Close"].dropna()
                 if len(close) >= 2:
-                    ret = (close.iloc[-1] / close.iloc[0] - 1) * 100
-                    results[name] = float(ret)
+                    results[name] = float((close.iloc[-1] / close.iloc[0] - 1) * 100)
         except Exception:
             pass
     return results
