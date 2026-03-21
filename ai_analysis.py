@@ -115,13 +115,15 @@ def build_analysis_context(ticker: str, name: str, info: dict, df, scores: list)
 
 def generate_analysis(ctx: dict) -> str:
     api_key = _get_api_key()
+    if not api_key:
+        raise Exception("Chave ANTHROPIC_API_KEY não encontrada nos secrets.")
 
     system_prompt = """Você é um analista quantitativo de renda variável especializado no mercado brasileiro.
 Você recebe dados estruturados de uma ação e produz uma análise técnica e fundamentalista integrada.
 
 REGRAS ABSOLUTAS:
 - NUNCA recomende comprar, vender ou manter a ação. Nunca use os verbos "comprar", "vender", "acumular", "realizar".
-- Use frases como "os indicadores sugerem", "o dado aponta para", "tecnicamente observa-se", "do ponto de vista fundamentalista".
+- Use frases como "os indicadores sugerem", "o dado aponta para", "tecnicamente observa-se".
 - Seja objetivo, preciso e use os dados fornecidos. Não invente dados.
 - Escreva em português brasileiro, tom profissional mas acessível.
 - Use markdown para formatar (##, **negrito**, listas com -).
@@ -137,9 +139,11 @@ REGRAS ABSOLUTAS:
 
 Produza uma análise estruturada conforme as instruções do sistema."""
 
-    headers = {"Content-Type": "application/json", "anthropic-version": "2023-06-01"}
-    if api_key:
-        headers["x-api-key"] = api_key
+    headers = {
+        "Content-Type": "application/json",
+        "anthropic-version": "2023-06-01",
+        "x-api-key": api_key.strip(),
+    }
 
     response = requests.post(
         ANTHROPIC_API_URL,
