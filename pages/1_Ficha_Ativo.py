@@ -8,7 +8,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from utils import (
     STYLE, fetch_price_history, fetch_fundamentals,
     calc_all_indicators, compute_all_scores,
-    render_metric, render_score_card, SAFE_TICKERS, compute_valuation
+    render_metric, render_score_card, SAFE_TICKERS, compute_valuation,
+    get_peers, fetch_peer_data
 )
 from ai_analysis import render_analysis_section
 
@@ -75,7 +76,7 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # ─── TABS ─────────────────────────────────────────────────────────────────────
-tab_at, tab_af, tab_vl, tab_fw = st.tabs(["ANÁLISE TÉCNICA", "ANÁLISE FUNDAMENTALISTA", "VALUATION", "FRAMEWORKS"])
+tab_at, tab_af, tab_vl, tab_peers, tab_fw = st.tabs(["ANÁLISE TÉCNICA", "ANÁLISE FUNDAMENTALISTA", "VALUATION", "COMPARATIVO SETORIAL", "FRAMEWORKS"])
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 1 — ANÁLISE TÉCNICA
@@ -355,6 +356,166 @@ with tab_vl:
         Valuation é uma estimativa — não uma certeza. Use como referência comparativa, não como alvo absoluto.
     </div>
     """, unsafe_allow_html=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 4 — COMPARATIVO SETORIAL
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_peers:
+    sector = info.get("sector", "")
+    peers = get_peers(ticker_input, sector)
+    all_peers_br  = [t for t in peers.get("br", [])  if t != ticker_input]
+    all_peers_intl = peers.get("intl", [])
+
+    st.markdown(f'''
+    <div style="margin-bottom:20px">
+        <div style="font-family:monospace;font-size:10px;letter-spacing:3px;color:#c8f564;text-transform:uppercase;margin-bottom:6px">
+            COMPARATIVO SETORIAL · {sector or "Setor"}
+        </div>
+        <div style="font-size:13px;color:#6b7080">
+            {len(all_peers_br)} pares brasileiros · {len(all_peers_intl)} pares internacionais
+        </div>
+    </div>
+    ''', unsafe_allow_html=True)
+
+    col_sel1, col_sel2 = st.columns(2)
+    with col_sel1:
+        sel_br = st.multiselect("Pares brasileiros", all_peers_br, default=all_peers_br[:4])
+    with col_sel2:
+        sel_intl = st.multiselect("Pares internacionais", all_peers_intl, default=all_peers_intl[:4])
+
+    if st.button("Carregar comparativo", key="btn_peers"):
+        tickers_to_fetch = [ticker_input] + sel_br + sel_intl
+        with st.spinner(f"Buscando dados de {len(tickers_to_fetch)} empresas..."):
+            peers_data = fetch_peer_data(tickers_to_fetch)
+        st.session_state["peers_data"] = peers_data
+        st.session_state["peers_ticker"] = ticker_input
+
+    if st.session_state.get("peers_data") and st.session_state.get("peers_ticker") == ticker_input:
+        peers_data = st.session_state["peers_data"]
+
+        # ── PERFORMANCE 1 ANO ──
+        st.markdown('<div style="font-family:monospace;font-size:10px;letter-spacing:2px;color:#c8f564;text-transform:uppercase;margin:20px 0 12px">RETORNO 1 ANO</div>', unsafe_allow_html=True)
+        perf_data = [(d["ticker"], d.get("ret_1a"), d["is_br"]) for d in peers_data if d.get("ret_1a") is not None]
+        perf_data.sort(key=lambda x: x[1], reverse=True)
+        if perf_data:
+            fig_bar = go.Figure()
+            colors = ["#c8f564" if t == ticker_input else ("#4af0c8" if br else "#7b6cf6") for t, _, br in perf_data]
+            fig_bar.add_trace(go.Bar(
+                x=[t.replace(".SA","") for t, _, _ in perf_data],
+                y=[v for _, v, _ in perf_data],
+                marker_color=colors,
+                text=[f"{v:+.1f}%" for _, v, _ in perf_data],
+                textposition="outside",
+            ))
+            fig_bar.add_hline(y=0, line_color="#242836", line_width=1)
+            fig_bar.update_layout(height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="#13161e",
+                font=dict(family="DM Sans", color="#6b7080", size=11),
+                margin=dict(l=0,r=0,t=20,b=0), showlegend=False,
+                yaxis=dict(gridcolor="#242836", ticksuffix="%"),
+                xaxis=dict(gridcolor="rgba(0,0,0,0)"))
+            st.plotly_chart(fig_bar, use_container_width=True)
+
+        # ── TABELA COMPARATIVA ──
+        st.markdown('<div style="font-family:monospace;font-size:10px;letter-spacing:2px;color:#c8f564;text-transform:uppercase;margin:20px 0 12px">MÚLTIPLOS COMPARATIVOS</div>', unsafe_allow_html=True)
+
+        def fmt_val(v, suffix="", mult=1, decimals=1):
+            if v is None: return "–"
+            try: return f"{float(v)*mult:.{decimals}f}{suffix}"
+            except: return "–"
+
+        def mc_fmt(v):
+            if v is None: return "–"
+            v = float(v)
+            if v >= 1e12: return f"{v/1e12:.1f}T"
+            if v >= 1e9:  return f"{v/1e9:.1f}B"
+            if v >= 1e6:  return f"{v/1e6:.0f}M"
+            return str(v)
+
+        rows_html = ""
+        for d in peers_data:
+            is_main = d["ticker"] == ticker_input
+            flag = "🇧🇷" if d["is_br"] else "🌎"
+            highlight = "border-left:3px solid #c8f564;" if is_main else ""
+            name_short = (d["nome"] or d["ticker"])[:22]
+            moeda = d.get("moeda","")
+            dy_val = d.get("dy")
+            dy_str = f"{float(dy_val)*100:.1f}%" if dy_val else "–"
+            roe_val = d.get("roe")
+            roe_str = f"{float(roe_val)*100:.1f}%" if roe_val else "–"
+            mg_val = d.get("margem")
+            mg_str = f"{float(mg_val)*100:.1f}%" if mg_val else "–"
+            ret_val = d.get("ret_1a")
+            ret_str = f"{ret_val:+.1f}%" if ret_val is not None else "–"
+            ret_color = "#4af0c8" if (ret_val or 0) >= 0 else "#f05b5b"
+
+            rows_html += f"""<tr style="{highlight}">
+                <td><strong style="color:{'#c8f564' if is_main else '#e8eaf2'}">{flag} {d['ticker'].replace('.SA','')}</strong>
+                    <div style="font-size:11px;color:#6b7080">{name_short}</div></td>
+                <td style="font-family:monospace">{moeda} {fmt_val(d.get('preco'), decimals=2)}</td>
+                <td style="font-family:monospace">{fmt_val(d.get('pl'), 'x')}</td>
+                <td style="font-family:monospace">{fmt_val(d.get('pvp'), 'x')}</td>
+                <td style="font-family:monospace">{fmt_val(d.get('ev_ebitda'), 'x')}</td>
+                <td style="font-family:monospace;color:#4af0c8">{dy_str}</td>
+                <td style="font-family:monospace">{roe_str}</td>
+                <td style="font-family:monospace">{mg_str}</td>
+                <td style="font-family:monospace;color:{ret_color}">{ret_str}</td>
+                <td style="font-family:monospace">{mc_fmt(d.get('market_cap'))}</td>
+            </tr>"""
+
+        st.markdown(f"""
+        <div style="background:var(--surface);border:1px solid #242836;border-radius:10px;overflow-x:auto">
+        <table class="data-table" style="min-width:780px">
+        <thead><tr>
+            <th>Empresa</th><th>Preço</th><th>P/L</th><th>P/VP</th><th>EV/EBITDA</th>
+            <th>DY</th><th>ROE</th><th>Margem</th><th>Ret. 1A</th><th>Mkt Cap</th>
+        </tr></thead>
+        <tbody>{rows_html}</tbody>
+        </table></div>
+        """, unsafe_allow_html=True)
+
+        # ── SCATTER P/L vs ROE ──
+        st.markdown('<div style="font-family:monospace;font-size:10px;letter-spacing:2px;color:#c8f564;text-transform:uppercase;margin:24px 0 12px">P/L × ROE — POSICIONAMENTO RELATIVO</div>', unsafe_allow_html=True)
+        fig_sc = go.Figure()
+        for d in peers_data:
+            pl = d.get("pl")
+            roe = d.get("roe")
+            if pl and roe:
+                is_main = d["ticker"] == ticker_input
+                color = "#c8f564" if is_main else ("#4af0c8" if d["is_br"] else "#7b6cf6")
+                size = 18 if is_main else 10
+                label = d["ticker"].replace(".SA","")
+                fig_sc.add_trace(go.Scatter(
+                    x=[float(roe)*100], y=[float(pl)],
+                    mode="markers+text",
+                    marker=dict(color=color, size=size),
+                    text=[label], textposition="top center",
+                    textfont=dict(color=color, size=10),
+                    name=label, showlegend=False,
+                ))
+        fig_sc.update_layout(height=340, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="#13161e",
+            font=dict(family="DM Sans", color="#6b7080", size=11),
+            xaxis=dict(title="ROE (%)", gridcolor="#242836"),
+            yaxis=dict(title="P/L (x)", gridcolor="#242836"),
+            margin=dict(l=0,r=0,t=20,b=0))
+
+        # legenda manual
+        leg_html = '''<div style="display:flex;gap:20px;font-size:12px;color:#6b7080;margin-top:8px">
+            <span><span style="color:#c8f564">■</span> Ativo selecionado</span>
+            <span><span style="color:#4af0c8">■</span> Pares BR</span>
+            <span><span style="color:#7b6cf6">■</span> Pares internacionais</span>
+        </div>'''
+        st.plotly_chart(fig_sc, use_container_width=True)
+        st.markdown(leg_html, unsafe_allow_html=True)
+
+        st.markdown("""
+        <div style="background:#1a1710;border:1px solid #3d3520;border-left:3px solid #f5c842;
+             border-radius:0 8px 8px 0;padding:14px 18px;font-size:12px;color:#a89b6e;
+             line-height:1.6;margin-top:20px">
+            Dados coletados via Yahoo Finance. Empresas internacionais em USD. 
+            Retorno 1A sem ajuste cambial. Não constitui recomendação de investimento.
+        </div>
+        """, unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 3 — FRAMEWORKS
