@@ -318,7 +318,31 @@ with tab_fw:
 
     with col_desc:
         for s in scores:
-            st.markdown(render_score_card(s), unsafe_allow_html=True)
+            score = s["score"]
+            color = s["color"]
+            badge_color = "#4af0c8" if score >= 65 else ("#f5c842" if score >= 40 else "#f05b5b")
+            criteria_rows = ""
+            for c in s["criteria"]:
+                icon = "✓" if c["pass"] is True else ("✗" if c["pass"] is False else "–")
+                ccolor = "#4af0c8" if c["pass"] is True else ("#f05b5b" if c["pass"] is False else "#6b7080")
+                criteria_rows += f'''<div style="display:flex;justify-content:space-between;font-size:12px;padding:5px 0;border-bottom:1px solid #242836;color:#6b7080">
+                    <span>{c["label"]}</span>
+                    <span style="font-family:monospace;color:{ccolor}">{icon} {c["note"]}</span>
+                </div>'''
+            html = f'''<div style="background:#13161e;border:1px solid #242836;border-radius:10px;padding:20px;margin-bottom:12px">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+                    <div>
+                        <div style="font-size:18px;color:#e8eaf2;font-weight:500">{s["name"]}</div>
+                        <div style="font-size:11px;color:#6b7080;margin-top:2px">{s["description"]}</div>
+                    </div>
+                    <div style="font-size:26px;font-weight:500;color:{badge_color}">{score}<span style="font-size:13px;color:#6b7080">/100</span></div>
+                </div>
+                <div style="background:#1a1e28;border-radius:3px;height:5px;margin:10px 0 14px">
+                    <div style="width:{score}%;height:5px;border-radius:3px;background:{color}"></div>
+                </div>
+                {criteria_rows}
+            </div>'''
+            st.markdown(html, unsafe_allow_html=True)
 
     st.markdown("""
     <div class="disclaimer" style="margin-top:24px">
