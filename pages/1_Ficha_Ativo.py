@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from utils import (
     STYLE, fetch_price_history, fetch_fundamentals,
     calc_all_indicators, compute_all_scores,
-    render_metric, render_score_card, SAFE_TICKERS
+    render_metric, render_score_card, SAFE_TICKERS, compute_valuation
 )
 from ai_analysis import render_analysis_section
 
@@ -46,6 +46,7 @@ if df_raw.empty:
 df = calc_all_indicators(df_raw)
 close = df["Close"]
 scores = compute_all_scores(info, df)
+valuation = compute_valuation(info)
 
 # ─── HEADER ───────────────────────────────────────────────────────────────────
 name = info.get("longName") or info.get("shortName") or ticker_input
@@ -74,7 +75,7 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # ─── TABS ─────────────────────────────────────────────────────────────────────
-tab_at, tab_af, tab_fw = st.tabs(["ANÁLISE TÉCNICA", "ANÁLISE FUNDAMENTALISTA", "FRAMEWORKS"])
+tab_at, tab_af, tab_vl, tab_fw = st.tabs(["ANÁLISE TÉCNICA", "ANÁLISE FUNDAMENTALISTA", "VALUATION", "FRAMEWORKS"])
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 1 — ANÁLISE TÉCNICA
@@ -266,6 +267,94 @@ with tab_af:
         st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
         st.markdown('<div class="section-tag">SOBRE A EMPRESA</div>', unsafe_allow_html=True)
         st.markdown(f'<div style="font-size:14px;color:var(--muted);line-height:1.7;max-width:800px">{summary[:800]}{"..." if len(summary)>800 else ""}</div>', unsafe_allow_html=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 3 — VALUATION
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_vl:
+    price = valuation["preco_atual"]
+    consenso = valuation["consenso"]
+    upside = valuation["upside_pct"]
+
+    # Header consenso
+    if consenso and price:
+        upside_cls = "up" if upside >= 0 else "down"
+        upside_sign = "+" if upside >= 0 else ""
+        verdict = "SUBVALORIZADA" if upside >= 15 else ("SOBREVALORIZADA" if upside <= -15 else "PRÓXIMA DO JUSTO")
+        verdict_color = "#4af0c8" if upside >= 15 else ("#f05b5b" if upside <= -15 else "#f5c842")
+
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.markdown(render_metric("Preço atual", f"R$ {float(price):.2f}"), unsafe_allow_html=True)
+        with c2:
+            st.markdown(render_metric("Preço justo (consenso)", f"R$ {consenso:.2f}", delta_class=upside_cls), unsafe_allow_html=True)
+        with c3:
+            st.markdown(render_metric("Upside/Downside", f"{upside_sign}{upside:.1f}%", verdict, upside_cls), unsafe_allow_html=True)
+
+        st.markdown(f"""
+        <div style="background:#13161e;border:1px solid #242836;border-left:4px solid {verdict_color};
+             border-radius:0 10px 10px 0;padding:16px 20px;margin:16px 0 28px">
+            <span style="font-size:11px;letter-spacing:2px;color:#6b7080;font-family:monospace">VEREDICTO DO CONSENSO</span>
+            <div style="font-size:22px;font-weight:500;color:{verdict_color};margin-top:4px">{verdict}</div>
+            <div style="font-size:12px;color:#6b7080;margin-top:4px">
+                Média de {valuation["validos"]} modelo(s) com dados suficientes
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.warning("Dados fundamentalistas insuficientes para calcular valuation. Tente um ticker com mais cobertura (ex: PETR4, VALE3, ITUB4).")
+
+    # Modelos individuais
+    st.markdown('<div style="font-family:monospace;font-size:10px;letter-spacing:3px;color:#c8f564;text-transform:uppercase;margin-bottom:16px">MODELOS DE VALUATION</div>', unsafe_allow_html=True)
+
+    for m in valuation["modelos"]:
+        if m["valido"] and m["valor"]:
+            val = m["valor"]
+            price_f = float(price) if price else 0
+            diff = ((val / price_f) - 1) * 100 if price_f > 0 else 0
+            diff_color = "#4af0c8" if diff >= 0 else "#f05b5b"
+            diff_sign = "+" if diff >= 0 else ""
+
+            inputs_html = " · ".join(f'<span style="color:#6b7080">{k}:</span> <span style="color:#e8eaf2">{v}</span>' for k, v in m.get("inputs", {}).items())
+
+            st.markdown(f"""
+            <div style="background:#13161e;border:1px solid #242836;border-radius:10px;padding:20px 24px;margin-bottom:10px">
+                <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px">
+                    <div>
+                        <div style="font-size:16px;font-weight:500;color:#e8eaf2">{m["modelo"]}</div>
+                        <div style="font-size:11px;color:#6b7080;margin-top:3px;font-family:monospace">{m["formula"]}</div>
+                        <div style="font-size:11px;margin-top:6px;font-family:monospace">{inputs_html}</div>
+                    </div>
+                    <div style="text-align:right">
+                        <div style="font-size:26px;font-weight:500;color:#e8eaf2">R$ {val:.2f}</div>
+                        <div style="font-size:13px;color:{diff_color};font-family:monospace">{diff_sign}{diff:.1f}% vs atual</div>
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div style="background:#13161e;border:1px solid #242836;border-radius:10px;padding:16px 24px;margin-bottom:10px;opacity:0.5">
+                <div style="display:flex;justify-content:space-between;align-items:center">
+                    <div>
+                        <div style="font-size:15px;color:#6b7080">{m["modelo"]}</div>
+                        <div style="font-size:11px;color:#3d4050;margin-top:3px">{m.get("motivo","dados insuficientes")}</div>
+                    </div>
+                    <div style="font-family:monospace;font-size:13px;color:#3d4050">N/D</div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+    st.markdown("""
+    <div style="background:#1a1710;border:1px solid #3d3520;border-left:3px solid #f5c842;border-radius:0 8px 8px 0;
+         padding:14px 18px;font-size:12px;color:#a89b6e;line-height:1.6;margin-top:20px">
+        <strong style="color:#f5c842">Sobre os modelos:</strong>
+        Graham e Bazin são métodos clássicos conservadores. Gordon/DDM é indicado para empresas pagadoras de dividendos.
+        DCF e EV/EBITDA dependem de dados de fluxo de caixa e dívida. O consenso é a média simples dos modelos com dados disponíveis.
+        Valuation é uma estimativa — não uma certeza. Use como referência comparativa, não como alvo absoluto.
+    </div>
+    """, unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 3 — FRAMEWORKS
