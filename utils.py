@@ -200,218 +200,141 @@ div[data-testid="stTextInput"] > div > div {
 
 # ─── DATA FETCHING ─────────────────────────────────────────────────────────────
 
+def _brapi_token() -> str:
+    try:
+        return st.secrets["BRAPI_TOKEN"]
+    except Exception:
+        return ""
+
+def _brapi_get(path: str, params: dict = {}) -> dict:
+    """Faz requisição autenticada à brapi.dev."""
+    token = _brapi_token()
+    base  = "https://brapi.dev/api"
+    p     = dict(params)
+    if token:
+        p["token"] = token
+    r = requests.get(f"{base}{path}", params=p, timeout=20)
+    r.raise_for_status()
+    return r.json()
+
+
 def fetch_price_history(ticker: str, period: str = "1y") -> pd.DataFrame:
-    symbol = ticker.upper().replace(".SA", "") + ".SA"
-    range_map = {"6mo": "6mo", "1y": "1y", "2y": "2y", "3y": "5y"}
-    yf_range = range_map.get(period, "1y")
-    ua = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36"}
-
-    # Source 1 — Yahoo Finance chart API direta
-    for host in ["query1", "query2"]:
-        try:
-            url = f"https://{host}.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range={yf_range}"
-            r = requests.get(url, headers=ua, timeout=20)
-            if r.status_code != 200:
-                continue
-            data = r.json()
-            result = data.get("chart", {}).get("result", [])
-            if not result:
-                continue
-            r0 = result[0]
-            timestamps = r0.get("timestamp", [])
-            if not timestamps:
-                continue
-            indicators = r0.get("indicators", {})
-            q = indicators.get("quote", [{}])[0]
-            # Yahoo às vezes retorna closes nulos e usa adjclose
-            adjclose_list = indicators.get("adjclose", [{}])
-            adj = adjclose_list[0].get("adjclose", []) if adjclose_list else []
-            closes_raw  = q.get("close",  [])
-            opens_raw   = q.get("open",   [])
-            highs_raw   = q.get("high",   [])
-            lows_raw    = q.get("low",    [])
-            volumes_raw = q.get("volume", [])
-            rows = []
-            for i, ts in enumerate(timestamps):
-                # Tenta close, depois adjclose
-                c = (closes_raw[i] if i < len(closes_raw) else None)
-                if c is None:
-                    c = (adj[i] if i < len(adj) else None)
-                if c is None:
-                    continue
-                o = (opens_raw[i]   if i < len(opens_raw)   else None) or c
-                h = (highs_raw[i]   if i < len(highs_raw)   else None) or c
-                l = (lows_raw[i]    if i < len(lows_raw)    else None) or c
-                v = (volumes_raw[i] if i < len(volumes_raw) else None) or 0
-                rows.append({"Date": pd.to_datetime(ts, unit="s"),
-                             "Open": o, "High": h, "Low": l, "Close": c, "Volume": v})
-            if rows:
-                df = pd.DataFrame(rows).set_index("Date").sort_index()
-                return df.dropna(subset=["Close"])
-        except Exception:
-            continue
-
-    # Source 2 — brapi.dev
+    symbol = ticker.upper().replace(".SA", "")
+    range_map = {"6mo": "6mo", "1y": "1y", "2y": "2y", "3y": "3y"}
     try:
-        sym = ticker.upper().replace(".SA", "")
-        url = f"https://brapi.dev/api/quote/{sym}?range={period}&interval=1d"
-        r = requests.get(url, headers=ua, timeout=15)
-        if r.status_code == 200:
-            results = r.json().get("results", [])
-            if results:
-                hist = results[0].get("historicalDataPrice") or []
-                rows = []
-                for h in hist:
-                    c = h.get("close") or h.get("adjustedClose")
-                    if c is None:
-                        continue
-                    try:
-                        d = pd.to_datetime(h["date"], unit="s") if isinstance(h["date"], (int, float)) else pd.to_datetime(h["date"])
-                        rows.append({"Date": d, "Open": h.get("open") or c, "High": h.get("high") or c,
-                                     "Low": h.get("low") or c, "Close": c, "Volume": h.get("volume") or 0})
-                    except Exception:
-                        continue
-                if rows:
-                    df = pd.DataFrame(rows).set_index("Date").sort_index()
-                    return df.dropna(subset=["Close"])
+        data = _brapi_get(f"/quote/{symbol}", {
+            "range": range_map.get(period, "1y"),
+            "interval": "1d",
+            "fundamental": "false",
+            "history": "true",
+        })
+        results = data.get("results", [])
+        if not results:
+            return pd.DataFrame()
+        hist = results[0].get("historicalDataPrice") or []
+        rows = []
+        for h in hist:
+            c = h.get("close") or h.get("adjustedClose")
+            if c is None:
+                continue
+            try:
+                d = (pd.to_datetime(h["date"], unit="s")
+                     if isinstance(h["date"], (int, float))
+                     else pd.to_datetime(h["date"]))
+                rows.append({
+                    "Date":   d,
+                    "Open":   h.get("open")   or c,
+                    "High":   h.get("high")   or c,
+                    "Low":    h.get("low")    or c,
+                    "Close":  c,
+                    "Volume": h.get("volume") or 0,
+                })
+            except Exception:
+                continue
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows).set_index("Date").sort_index()
+        return df.dropna(subset=["Close"])
     except Exception:
-        pass
-
-    # Source 3 — yfinance lib
-    try:
-        import yfinance as yf
-        df = yf.download(symbol, period=period, progress=False, threads=False, auto_adjust=True)
-        if df is not None and not df.empty:
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
-            df.columns = [str(c) for c in df.columns]
-            return df.dropna(subset=["Close"])
-    except Exception:
-        pass
-
-    return pd.DataFrame()
+        return pd.DataFrame()
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_fundamentals(ticker: str) -> dict:
-    symbol_sa = ticker if ticker.endswith(".SA") else ticker + ".SA"
-    symbol = ticker.replace(".SA", "")
-    info = {}
-
-    # Step 1 — brapi basic quote (price, P/L, EPS)
+    symbol = ticker.upper().replace(".SA", "")
+    info   = {}
     try:
-        url = f"{BRAPI_BASE}/quote/{symbol}?fundamental=true"
-        resp = requests.get(url, timeout=15)
-        data = resp.json()
+        data = _brapi_get(f"/quote/{symbol}", {"fundamental": "true"})
         results = data.get("results", [])
-        if results:
-            r = results[0]
-            info["longName"]           = r.get("longName") or r.get("shortName", symbol)
-            info["shortName"]          = r.get("shortName", symbol)
-            info["regularMarketPrice"] = r.get("regularMarketPrice")
-            info["currentPrice"]       = r.get("regularMarketPrice")
-            info["marketCap"]          = r.get("marketCap")
-            info["trailingPE"]         = r.get("priceEarnings")
-            info["trailingEps"]        = r.get("earningsPerShare")
-            info["beta"]               = r.get("beta")
+        if not results:
+            return {}
+        r = results[0]
+
+        def g(key, default=None):
+            return r.get(key, default)
+
+        info["longName"]           = g("longName") or g("shortName", symbol)
+        info["shortName"]          = g("shortName", symbol)
+        info["sector"]             = g("sector", "")
+        info["industry"]           = g("industry", "")
+        info["longBusinessSummary"]= g("longBusinessSummary", "")
+        info["currentPrice"]       = g("regularMarketPrice")
+        info["regularMarketPrice"] = g("regularMarketPrice")
+        info["marketCap"]          = g("marketCap")
+        info["beta"]               = g("beta")
+        # Valuation
+        info["trailingPE"]         = g("trailingPE") or g("priceEarnings")
+        info["forwardPE"]          = g("forwardPE")
+        info["priceToBook"]        = g("priceToBook")
+        info["enterpriseToEbitda"] = g("enterpriseToEbitda")
+        info["enterpriseToRevenue"]= g("enterpriseToRevenue")
+        info["priceToSalesTrailing12Months"] = g("priceToSalesTrailing12Months")
+        # EPS / book (Graham)
+        info["trailingEps"]        = g("epsTrailingTwelveMonths") or g("earningsPerShare")
+        info["bookValue"]          = g("bookValue")
+        # Dividendos
+        info["dividendYield"]      = g("dividendYield") or g("trailingAnnualDividendYield")
+        info["dividendRate"]       = g("dividendRate")  or g("trailingAnnualDividendRate")
+        info["lastDividendValue"]  = g("lastDividendValue") or g("dividendRate")
+        info["payoutRatio"]        = g("payoutRatio")
+        # Rentabilidade
+        info["returnOnEquity"]     = g("returnOnEquity")
+        info["returnOnAssets"]     = g("returnOnAssets")
+        info["profitMargins"]      = g("profitMargins")
+        info["grossMargins"]       = g("grossMargins")
+        info["operatingMargins"]   = g("operatingMargins")
+        # Crescimento
+        info["revenueGrowth"]      = g("revenueGrowth")
+        info["earningsGrowth"]     = g("earningsGrowth")
+        # Endividamento
+        info["debtToEquity"]       = g("debtToEquity")
+        info["currentRatio"]       = g("currentRatio")
+        info["totalDebt"]          = g("totalDebt")
+        info["totalCash"]          = g("totalCash")
+        # FCF / EBITDA (DCF)
+        info["freeCashflow"]       = g("freeCashflow")
+        info["ebitda"]             = g("ebitda")
+        info["sharesOutstanding"]  = g("sharesOutstanding")
+
+        return {k: v for k, v in info.items() if v is not None}
     except Exception:
-        pass
-
-    # Step 2 — Yahoo Finance quoteSummary (dividends, fundamentals)
-    try:
-        modules = "summaryDetail,defaultKeyStatistics,financialData,incomeStatementHistory,balanceSheetHistory"
-        url = f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol_sa}?modules={modules}"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        resp = requests.get(url, headers=headers, timeout=20)
-        if resp.status_code == 200:
-            result = resp.json().get("quoteSummary", {}).get("result", [])
-            if result:
-                r = result[0]
-                sd  = r.get("summaryDetail", {})
-                ks  = r.get("defaultKeyStatistics", {})
-                fd  = r.get("financialData", {})
-
-                def raw(d, k): return d.get(k, {}).get("raw") if isinstance(d.get(k), dict) else d.get(k)
-
-                # Preço
-                if not info.get("currentPrice"):
-                    info["currentPrice"] = raw(fd, "currentPrice")
-                # Valuation
-                info["trailingPE"]      = info.get("trailingPE") or raw(sd, "trailingPE")
-                info["forwardPE"]       = raw(sd, "forwardPE")
-                info["priceToBook"]     = raw(ks, "priceToBook")
-                info["enterpriseToEbitda"] = raw(ks, "enterpriseToEbitda")
-                info["enterpriseToRevenue"] = raw(ks, "enterpriseToRevenue")
-                info["priceToSalesTrailing12Months"] = raw(sd, "priceToSalesTrailing12Months")
-                # Dividendos
-                info["dividendYield"]   = raw(sd, "dividendYield") or raw(sd, "trailingAnnualDividendYield")
-                info["dividendRate"]    = raw(sd, "dividendRate") or raw(sd, "trailingAnnualDividendRate")
-                info["lastDividendValue"] = raw(ks, "lastDividendValue") or raw(sd, "dividendRate")
-                info["payoutRatio"]     = raw(sd, "payoutRatio")
-                # Rentabilidade
-                info["returnOnEquity"]  = raw(fd, "returnOnEquity")
-                info["returnOnAssets"]  = raw(fd, "returnOnAssets")
-                info["profitMargins"]   = raw(fd, "profitMargins")
-                info["grossMargins"]    = raw(fd, "grossMargins")
-                info["operatingMargins"] = raw(fd, "operatingMargins")
-                # Crescimento
-                info["revenueGrowth"]   = raw(fd, "revenueGrowth")
-                info["earningsGrowth"]  = raw(fd, "earningsGrowth")
-                # Dívida e liquidez
-                info["debtToEquity"]    = raw(ks, "debtToEquity")
-                info["currentRatio"]    = raw(fd, "currentRatio")
-                info["totalDebt"]       = raw(fd, "totalDebt") or raw(ks, "totalDebt")
-                info["totalCash"]       = raw(fd, "totalCash")
-                # FCF e EBITDA (para DCF)
-                info["freeCashflow"]    = raw(fd, "freeCashflow")
-                info["ebitda"]          = raw(fd, "ebitda")
-                info["sharesOutstanding"] = raw(ks, "sharesOutstanding")
-                # EPS e book value (para Graham)
-                info["trailingEps"]     = info.get("trailingEps") or raw(ks, "trailingEps")
-                info["bookValue"]       = raw(ks, "bookValue")
-                # Setor
-                info["sector"]          = r.get("summaryProfile", {}).get("sector", "")
-                info["industry"]        = r.get("summaryProfile", {}).get("industry", "")
-                info["longBusinessSummary"] = r.get("summaryProfile", {}).get("longBusinessSummary", "")
-    except Exception:
-        pass
-
-    # Step 3 — yfinance fallback
-    if not info.get("trailingPE") and not info.get("dividendYield"):
-        try:
-            import yfinance as yf
-            t = yf.Ticker(symbol_sa)
-            yinfo = t.info or {}
-            for k, v in yinfo.items():
-                if k not in info or info[k] is None:
-                    info[k] = v
-        except Exception:
-            pass
-
-    return {k: v for k, v in info.items() if v is not None}
+        return {}
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=600, show_spinner=False)
 def fetch_benchmark_returns(period: str = "1y") -> dict:
-    benchmarks = {
-        "IBOV":    ("^BVSP", "yf"),
-        "Ouro":    ("GLD",   "yf"),
-        "S&P500":  ("^GSPC", "yf"),
-        "Dólar":   ("BRL=X", "yf"),
-    }
+    """Retorna retornos de benchmarks via brapi (IBOV) e dados fixos para os demais."""
     results = {}
-    for name, (sym, src) in benchmarks.items():
-        try:
-            import yfinance as yf
-            df = yf.download(sym, period=period, progress=False, threads=False, auto_adjust=True)
-            if df is not None and not df.empty:
-                if isinstance(df.columns, pd.MultiIndex):
-                    df.columns = df.columns.get_level_values(0)
-                close = df["Close"].dropna()
-                if len(close) >= 2:
-                    results[name] = float((close.iloc[-1] / close.iloc[0] - 1) * 100)
-        except Exception:
-            pass
+    # IBOV via brapi
+    try:
+        data = _brapi_get("/quote/%5EBVSP", {"range": period, "interval": "1d"})
+        r = data.get("results", [{}])[0]
+        hist = r.get("historicalDataPrice") or []
+        closes = [h.get("close") for h in hist if h.get("close")]
+        if len(closes) >= 2:
+            results["IBOV"] = round((closes[-1] / closes[0] - 1) * 100, 1)
+    except Exception:
+        pass
     return results
 
 
