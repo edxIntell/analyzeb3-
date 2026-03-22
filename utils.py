@@ -213,24 +213,38 @@ def fetch_price_history(ticker: str, period: str = "1y") -> pd.DataFrame:
             r = requests.get(url, headers=ua, timeout=20)
             if r.status_code != 200:
                 continue
-            result = r.json().get("chart", {}).get("result", [])
+            data = r.json()
+            result = data.get("chart", {}).get("result", [])
             if not result:
                 continue
-            timestamps = result[0].get("timestamp", [])
-            q = result[0].get("indicators", {}).get("quote", [{}])[0]
+            r0 = result[0]
+            timestamps = r0.get("timestamp", [])
+            if not timestamps:
+                continue
+            indicators = r0.get("indicators", {})
+            q = indicators.get("quote", [{}])[0]
+            # Yahoo às vezes retorna closes nulos e usa adjclose
+            adjclose_list = indicators.get("adjclose", [{}])
+            adj = adjclose_list[0].get("adjclose", []) if adjclose_list else []
+            closes_raw  = q.get("close",  [])
+            opens_raw   = q.get("open",   [])
+            highs_raw   = q.get("high",   [])
+            lows_raw    = q.get("low",    [])
+            volumes_raw = q.get("volume", [])
             rows = []
             for i, ts in enumerate(timestamps):
-                c = q.get("close", [])[i] if i < len(q.get("close", [])) else None
+                # Tenta close, depois adjclose
+                c = (closes_raw[i] if i < len(closes_raw) else None)
+                if c is None:
+                    c = (adj[i] if i < len(adj) else None)
                 if c is None:
                     continue
-                rows.append({
-                    "Date":   pd.to_datetime(ts, unit="s"),
-                    "Open":   (q.get("open",  [])[i] if i < len(q.get("open",  [])) else None) or c,
-                    "High":   (q.get("high",  [])[i] if i < len(q.get("high",  [])) else None) or c,
-                    "Low":    (q.get("low",   [])[i] if i < len(q.get("low",   [])) else None) or c,
-                    "Close":  c,
-                    "Volume": (q.get("volume",[])[i] if i < len(q.get("volume",[])) else None) or 0,
-                })
+                o = (opens_raw[i]   if i < len(opens_raw)   else None) or c
+                h = (highs_raw[i]   if i < len(highs_raw)   else None) or c
+                l = (lows_raw[i]    if i < len(lows_raw)    else None) or c
+                v = (volumes_raw[i] if i < len(volumes_raw) else None) or 0
+                rows.append({"Date": pd.to_datetime(ts, unit="s"),
+                             "Open": o, "High": h, "Low": l, "Close": c, "Volume": v})
             if rows:
                 df = pd.DataFrame(rows).set_index("Date").sort_index()
                 return df.dropna(subset=["Close"])
