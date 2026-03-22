@@ -200,7 +200,6 @@ div[data-testid="stTextInput"] > div > div {
 
 # ─── DATA FETCHING ─────────────────────────────────────────────────────────────
 
-@st.cache_data(ttl=60, show_spinner=False)
 def fetch_price_history(ticker: str, period: str = "1y") -> pd.DataFrame:
     symbol = ticker.upper().replace(".SA", "")
     symbol_sa = symbol + ".SA"
@@ -283,7 +282,7 @@ def fetch_price_history(ticker: str, period: str = "1y") -> pd.DataFrame:
     return pd.DataFrame()
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=1800, show_spinner=False)
 def fetch_fundamentals(ticker: str) -> dict:
     symbol_sa = ticker if ticker.endswith(".SA") else ticker + ".SA"
     symbol = ticker.replace(".SA", "")
