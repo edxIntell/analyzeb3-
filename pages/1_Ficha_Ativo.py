@@ -29,6 +29,10 @@ with st.sidebar:
                           format_func=lambda x: {"6mo":"6 meses","1y":"1 ano","2y":"2 anos","3y":"3 anos"}[x])
 
     st.markdown("---")
+    if st.button("🗑 Limpar cache", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
+    st.markdown("---")
     st.markdown('<div style="font-size:11px;color:#6b7080">Navegação</div>', unsafe_allow_html=True)
     st.page_link("Home.py", label="Home")
     st.page_link("pages/1_Ficha_Ativo.py", label="Ficha de Ativo")
