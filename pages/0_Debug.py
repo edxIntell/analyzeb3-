@@ -1,32 +1,44 @@
 import streamlit as st
 import requests
 
-st.title("Debug — Dividendos")
-ticker = st.text_input("Ticker", value="TAEE11")
+st.title("Debug — Fontes de dados")
+ticker = st.text_input("Ticker", value="VALE3")
 
-if st.button("Inspecionar campos de dividendo"):
-    symbol = ticker.upper().replace(".SA", "")
-    
-    # Sem fundamental
-    url1 = f"https://brapi.dev/api/quote/{symbol}?fundamental=false"
-    r1 = requests.get(url1, timeout=15).json()
-    res1 = (r1.get("results") or [{}])[0]
-    
-    # Com fundamental
-    url2 = f"https://brapi.dev/api/quote/{symbol}?fundamental=true"
-    r2 = requests.get(url2, timeout=15).json()
-    res2 = (r2.get("results") or [{}])[0]
+if st.button("Testar endpoint de dividendos brapi"):
+    symbol = ticker.upper().replace(".SA","")
+    url = f"https://brapi.dev/api/quote/{symbol}/dividends"
+    r = requests.get(url, timeout=15)
+    st.write("Status:", r.status_code)
+    st.json(r.json())
 
-    st.subheader("Campos relevantes (sem fundamental)")
-    for k in ["dividendYield", "dividendsPerShare", "lastDividendValue", 
-              "regularMarketPrice", "currentPrice"]:
-        st.write(f"`{k}` →", res1.get(k, "❌ ausente"))
+if st.button("Testar yfinance .info"):
+    try:
+        import yfinance as yf
+        t = yf.Ticker(ticker if ticker.endswith(".SA") else ticker+".SA")
+        info = t.info
+        for k in ["dividendYield","trailingAnnualDividendRate","trailingAnnualDividendYield",
+                  "lastDividendValue","dividendsPerShare","trailingEps","bookValue",
+                  "freeCashflow","ebitda","totalDebt","totalCash","sharesOutstanding",
+                  "returnOnEquity","priceToBook","trailingPE","currentPrice","regularMarketPrice"]:
+            st.write(f"`{k}` →", info.get(k, "❌ ausente"))
+    except Exception as e:
+        st.error(f"yfinance erro: {e}")
 
-    st.subheader("Campos relevantes (com fundamental=true)")
-    for k in ["dividendYield", "dividendsPerShare", "lastDividendValue",
-              "regularMarketPrice", "currentPrice", "trailingAnnualDividendRate",
-              "trailingAnnualDividendYield"]:
-        st.write(f"`{k}` →", res2.get(k, "❌ ausente"))
-
-    st.subheader("Todos os campos retornados (fundamental=true)")
-    st.json({k: v for k, v in res2.items() if v is not None and k != "historicalDataPrice"})
+if st.button("Testar Yahoo Finance direto (sem yfinance)"):
+    symbol = ticker.upper().replace(".SA","") + ".SA"
+    url = f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}?modules=summaryDetail,defaultKeyStatistics,financialData,incomeStatementHistory"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    r = requests.get(url, headers=headers, timeout=15)
+    st.write("Status:", r.status_code)
+    if r.status_code == 200:
+        data = r.json()
+        result = data.get("quoteSummary",{}).get("result",[{}])
+        if result:
+            sd = result[0].get("summaryDetail",{})
+            fd = result[0].get("financialData",{})
+            for k in ["dividendYield","trailingAnnualDividendRate","dividendRate"]:
+                st.write(f"summaryDetail.{k} →", sd.get(k,{}).get("raw","❌"))
+            for k in ["freeCashflow","totalDebt","totalCash","revenueGrowth","earningsGrowth"]:
+                st.write(f"financialData.{k} →", fd.get(k,{}).get("raw","❌"))
+    else:
+        st.error(r.text[:300])
