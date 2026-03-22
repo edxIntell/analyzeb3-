@@ -840,3 +840,131 @@ def compute_valuation(info: dict) -> dict:
         "modelos": modelos,
         "validos": len(validos),
     }
+
+
+# ─── SETOR PEERS ───────────────────────────────────────────────────────────────
+
+SECTOR_PEERS = {
+    # Petróleo & Gás
+    "PETR4.SA": {"br": ["PETR3.SA","RECV3.SA","PRIO3.SA","RRRP3.SA"], "intl": ["XOM","CVX","PBR","SLB"]},
+    "PETR3.SA": {"br": ["PETR4.SA","RECV3.SA","PRIO3.SA"], "intl": ["XOM","CVX","PBR"]},
+    "PRIO3.SA": {"br": ["PETR4.SA","RECV3.SA","RRRP3.SA"], "intl": ["XOM","CVX","PBR"]},
+    # Mineração & Siderurgia
+    "VALE3.SA": {"br": ["CSNA3.SA","GGBR4.SA","USIM5.SA","GOAU4.SA"], "intl": ["RIO","BHP","SCCO","FCX"]},
+    "CSNA3.SA": {"br": ["VALE3.SA","GGBR4.SA","USIM5.SA"], "intl": ["X","NUE","STLD"]},
+    "GGBR4.SA": {"br": ["VALE3.SA","CSNA3.SA","USIM5.SA"], "intl": ["X","NUE","MT"]},
+    # Petroquímica
+    "BRKM5.SA": {"br": ["UNIP6.SA","SUZB3.SA","KLBN11.SA"], "intl": ["LYB","DOW","DD","BASFY"]},
+    "UNIP6.SA": {"br": ["BRKM5.SA","SUZB3.SA"], "intl": ["LYB","DOW","DD"]},
+    # Papel & Celulose
+    "SUZB3.SA": {"br": ["KLBN11.SA","BRKM5.SA"], "intl": ["IP","WRK","PKG"]},
+    "KLBN11.SA": {"br": ["SUZB3.SA","BRKM5.SA"], "intl": ["IP","WRK"]},
+    # Bancos
+    "ITUB4.SA": {"br": ["BBAS3.SA","BBDC4.SA","SANB11.SA","BMGB4.SA"], "intl": ["JPM","BAC","C","SAN"]},
+    "BBAS3.SA": {"br": ["ITUB4.SA","BBDC4.SA","SANB11.SA"], "intl": ["JPM","BAC","ITUB"]},
+    "BBDC4.SA": {"br": ["ITUB4.SA","BBAS3.SA","SANB11.SA"], "intl": ["JPM","BAC","SAN"]},
+    # Energia Elétrica
+    "EGIE3.SA": {"br": ["TAEE11.SA","TRPL4.SA","CPLE6.SA","ENGI11.SA","ENBR3.SA"], "intl": ["NEE","DUK","SO","ELP"]},
+    "TAEE11.SA": {"br": ["EGIE3.SA","TRPL4.SA","CPLE6.SA","ENGI11.SA"], "intl": ["NEE","DUK","SO"]},
+    "TRPL4.SA": {"br": ["EGIE3.SA","TAEE11.SA","CPLE6.SA"], "intl": ["NEE","DUK","ELP"]},
+    # Saneamento
+    "SAPR11.SA": {"br": ["SBSP3.SA","CSMG3.SA","TIMS3.SA"], "intl": ["AWK","WTR","WTRG"]},
+    # Varejo
+    "LREN3.SA": {"br": ["ARZZ3.SA","SOMA3.SA","GRND3.SA"], "intl": ["GPS","ANF","BURL"]},
+    "MGLU3.SA": {"br": ["AMER3.SA","VIVA3.SA","LJQQ3.SA"], "intl": ["AMZN","WMT","TGT"]},
+    # Aviação
+    "AZUL4.SA": {"br": ["GOLL4.SA","EMBR3.SA"], "intl": ["DAL","UAL","LUV","AAL"]},
+    "GOLL4.SA": {"br": ["AZUL4.SA","EMBR3.SA"], "intl": ["DAL","UAL","LUV","LATAM"]},
+    # Tecnologia
+    "INTB3.SA": {"br": ["TOTS3.SA","LWSA3.SA"], "intl": ["MSFT","AAPL","GOOGL","META"]},
+    # Genérico por setor (fallback)
+    "_energy":    {"br": ["PETR4.SA","PRIO3.SA","RECV3.SA"], "intl": ["XOM","CVX","BP"]},
+    "_materials": {"br": ["VALE3.SA","GGBR4.SA","SUZB3.SA"], "intl": ["RIO","BHP","LYB"]},
+    "_financials":{"br": ["ITUB4.SA","BBAS3.SA","BBDC4.SA"], "intl": ["JPM","BAC","SAN"]},
+    "_utilities": {"br": ["EGIE3.SA","TAEE11.SA","TRPL4.SA"], "intl": ["NEE","DUK","ELP"]},
+    "_consumer":  {"br": ["ABEV3.SA","LREN3.SA","MGLU3.SA"], "intl": ["KO","PEP","WMT"]},
+    "_industrial":{"br": ["WEGE3.SA","EMBR3.SA","RENT3.SA"], "intl": ["GE","MMM","HON"]},
+}
+
+SECTOR_MAP = {
+    "Energy": "_energy", "Basic Materials": "_materials", "Materials": "_materials",
+    "Financial Services": "_financials", "Financials": "_financials",
+    "Utilities": "_utilities", "Consumer Staples": "_consumer",
+    "Consumer Defensive": "_consumer", "Consumer Discretionary": "_consumer",
+    "Consumer Cyclical": "_consumer", "Industrials": "_industrial",
+}
+
+def get_peers(ticker: str, sector: str) -> dict:
+    """Retorna lista de pares BR e internacionais para o ticker."""
+    if ticker in SECTOR_PEERS:
+        return SECTOR_PEERS[ticker]
+    sector_key = SECTOR_MAP.get(sector, "")
+    if sector_key and sector_key in SECTOR_PEERS:
+        return SECTOR_PEERS[sector_key]
+    return {"br": [], "intl": []}
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def fetch_peer_data(tickers: list) -> list:
+    """Busca dados básicos de múltiplos tickers para comparação setorial."""
+    results = []
+    for ticker in tickers:
+        try:
+            is_br = ticker.endswith(".SA")
+            symbol = ticker
+            info = {}
+
+            # Yahoo quoteSummary para todos
+            modules = "summaryDetail,defaultKeyStatistics,financialData,price"
+            url = f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}?modules={modules}"
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+            resp = requests.get(url, headers=headers, timeout=15)
+
+            if resp.status_code == 200:
+                result = resp.json().get("quoteSummary", {}).get("result", [])
+                if result:
+                    r = result[0]
+                    sd = r.get("summaryDetail", {})
+                    ks = r.get("defaultKeyStatistics", {})
+                    fd = r.get("financialData", {})
+                    pr = r.get("price", {})
+
+                    def raw(d, k):
+                        v = d.get(k)
+                        return v.get("raw") if isinstance(v, dict) else v
+
+                    price = raw(pr, "regularMarketPrice") or raw(sd, "regularMarketPrice")
+                    currency = pr.get("currency", "BRL" if is_br else "USD")
+                    name = pr.get("shortName") or pr.get("longName") or ticker
+
+                    info = {
+                        "ticker":    ticker,
+                        "nome":      name,
+                        "moeda":     currency,
+                        "preco":     price,
+                        "pl":        raw(sd, "trailingPE") or raw(sd, "forwardPE"),
+                        "pvp":       raw(ks, "priceToBook"),
+                        "roe":       raw(fd, "returnOnEquity"),
+                        "margem":    raw(fd, "profitMargins"),
+                        "dy":        raw(sd, "dividendYield") or raw(sd, "trailingAnnualDividendYield"),
+                        "ev_ebitda": raw(ks, "enterpriseToEbitda"),
+                        "beta":      raw(ks, "beta") or raw(sd, "beta"),
+                        "market_cap": raw(pr, "marketCap"),
+                        "variacao_1d": raw(pr, "regularMarketChangePercent"),
+                        "is_br":     is_br,
+                    }
+                    # Retorno 1 ano via histórico
+                    try:
+                        hist_url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=1y"
+                        hr = requests.get(hist_url, headers=headers, timeout=10).json()
+                        closes = hr.get("chart",{}).get("result",[{}])[0].get("indicators",{}).get("quote",[{}])[0].get("close",[])
+                        closes = [c for c in closes if c is not None]
+                        if len(closes) >= 2:
+                            info["ret_1a"] = round((closes[-1]/closes[0]-1)*100, 1)
+                    except Exception:
+                        pass
+
+                    results.append(info)
+        except Exception:
+            continue
+    return results
