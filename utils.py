@@ -257,9 +257,11 @@ def fetch_price_history(ticker: str, period: str = "1y") -> pd.DataFrame:
 
 @st.cache_data(ttl=3600)
 def fetch_fundamentals(ticker: str) -> dict:
+    symbol_sa = ticker if ticker.endswith(".SA") else ticker + ".SA"
     symbol = ticker.replace(".SA", "")
+    info = {}
 
-    # Try brapi fundamentals
+    # Step 1 — brapi basic quote (price, P/L, EPS)
     try:
         url = f"{BRAPI_BASE}/quote/{symbol}?fundamental=true"
         resp = requests.get(url, timeout=15)
@@ -267,45 +269,89 @@ def fetch_fundamentals(ticker: str) -> dict:
         results = data.get("results", [])
         if results:
             r = results[0]
-            info = {}
-            # Map brapi fields to yfinance-style keys
-            info["longName"]              = r.get("longName") or r.get("shortName", symbol)
-            info["shortName"]             = r.get("shortName", symbol)
-            info["sector"]                = r.get("sector", "")
-            info["industry"]              = r.get("industry", "")
-            info["marketCap"]             = r.get("marketCap")
-            info["trailingPE"]            = r.get("trailingPE")
-            info["forwardPE"]             = r.get("forwardPE")
-            info["priceToBook"]           = r.get("priceToBook")
-            info["enterpriseToEbitda"]    = r.get("enterpriseToEbitda")
-            info["enterpriseToRevenue"]   = r.get("enterpriseToRevenue")
-            info["returnOnEquity"]        = r.get("returnOnEquity")
-            info["returnOnAssets"]        = r.get("returnOnAssets")
-            info["profitMargins"]         = r.get("profitMargins")
-            info["grossMargins"]          = r.get("grossMargins")
-            info["dividendYield"]         = r.get("dividendYield")
-            info["payoutRatio"]           = r.get("payoutRatio")
-            info["debtToEquity"]          = r.get("debtToEquity")
-            info["revenueGrowth"]         = r.get("revenueGrowth")
-            info["earningsGrowth"]        = r.get("earningsGrowth")
-            info["beta"]                  = r.get("beta")
-            info["currentRatio"]          = r.get("currentRatio")
-            info["lastDividendValue"]     = r.get("dividendsPerShare")
-            info["longBusinessSummary"]   = r.get("longBusinessSummary", "")
-            info["priceToSalesTrailing12Months"] = r.get("priceToSalesTrailing12Months")
-            # Remove None values to avoid downstream issues
-            info = {k: v for k, v in info.items() if v is not None}
-            return info
+            info["longName"]           = r.get("longName") or r.get("shortName", symbol)
+            info["shortName"]          = r.get("shortName", symbol)
+            info["regularMarketPrice"] = r.get("regularMarketPrice")
+            info["currentPrice"]       = r.get("regularMarketPrice")
+            info["marketCap"]          = r.get("marketCap")
+            info["trailingPE"]         = r.get("priceEarnings")
+            info["trailingEps"]        = r.get("earningsPerShare")
+            info["beta"]               = r.get("beta")
     except Exception:
         pass
 
-    # Fallback: yfinance
+    # Step 2 — Yahoo Finance quoteSummary (dividends, fundamentals)
     try:
-        import yfinance as yf
-        t = yf.Ticker(ticker)
-        return t.info or {}
+        modules = "summaryDetail,defaultKeyStatistics,financialData,incomeStatementHistory,balanceSheetHistory"
+        url = f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol_sa}?modules={modules}"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        resp = requests.get(url, headers=headers, timeout=20)
+        if resp.status_code == 200:
+            result = resp.json().get("quoteSummary", {}).get("result", [])
+            if result:
+                r = result[0]
+                sd  = r.get("summaryDetail", {})
+                ks  = r.get("defaultKeyStatistics", {})
+                fd  = r.get("financialData", {})
+
+                def raw(d, k): return d.get(k, {}).get("raw") if isinstance(d.get(k), dict) else d.get(k)
+
+                # Preço
+                if not info.get("currentPrice"):
+                    info["currentPrice"] = raw(fd, "currentPrice")
+                # Valuation
+                info["trailingPE"]      = info.get("trailingPE") or raw(sd, "trailingPE")
+                info["forwardPE"]       = raw(sd, "forwardPE")
+                info["priceToBook"]     = raw(ks, "priceToBook")
+                info["enterpriseToEbitda"] = raw(ks, "enterpriseToEbitda")
+                info["enterpriseToRevenue"] = raw(ks, "enterpriseToRevenue")
+                info["priceToSalesTrailing12Months"] = raw(sd, "priceToSalesTrailing12Months")
+                # Dividendos
+                info["dividendYield"]   = raw(sd, "dividendYield") or raw(sd, "trailingAnnualDividendYield")
+                info["dividendRate"]    = raw(sd, "dividendRate") or raw(sd, "trailingAnnualDividendRate")
+                info["lastDividendValue"] = raw(ks, "lastDividendValue") or raw(sd, "dividendRate")
+                info["payoutRatio"]     = raw(sd, "payoutRatio")
+                # Rentabilidade
+                info["returnOnEquity"]  = raw(fd, "returnOnEquity")
+                info["returnOnAssets"]  = raw(fd, "returnOnAssets")
+                info["profitMargins"]   = raw(fd, "profitMargins")
+                info["grossMargins"]    = raw(fd, "grossMargins")
+                info["operatingMargins"] = raw(fd, "operatingMargins")
+                # Crescimento
+                info["revenueGrowth"]   = raw(fd, "revenueGrowth")
+                info["earningsGrowth"]  = raw(fd, "earningsGrowth")
+                # Dívida e liquidez
+                info["debtToEquity"]    = raw(ks, "debtToEquity")
+                info["currentRatio"]    = raw(fd, "currentRatio")
+                info["totalDebt"]       = raw(fd, "totalDebt") or raw(ks, "totalDebt")
+                info["totalCash"]       = raw(fd, "totalCash")
+                # FCF e EBITDA (para DCF)
+                info["freeCashflow"]    = raw(fd, "freeCashflow")
+                info["ebitda"]          = raw(fd, "ebitda")
+                info["sharesOutstanding"] = raw(ks, "sharesOutstanding")
+                # EPS e book value (para Graham)
+                info["trailingEps"]     = info.get("trailingEps") or raw(ks, "trailingEps")
+                info["bookValue"]       = raw(ks, "bookValue")
+                # Setor
+                info["sector"]          = r.get("summaryProfile", {}).get("sector", "")
+                info["industry"]        = r.get("summaryProfile", {}).get("industry", "")
+                info["longBusinessSummary"] = r.get("summaryProfile", {}).get("longBusinessSummary", "")
     except Exception:
-        return {}
+        pass
+
+    # Step 3 — yfinance fallback
+    if not info.get("trailingPE") and not info.get("dividendYield"):
+        try:
+            import yfinance as yf
+            t = yf.Ticker(symbol_sa)
+            yinfo = t.info or {}
+            for k, v in yinfo.items():
+                if k not in info or info[k] is None:
+                    info[k] = v
+        except Exception:
+            pass
+
+    return {k: v for k, v in info.items() if v is not None}
 
 
 @st.cache_data(ttl=300)
@@ -625,24 +671,25 @@ def valuation_graham(info: dict) -> dict:
 def valuation_gordon(info: dict) -> dict:
     """Modelo de Gordon (DDM): P = DPS / (Ke - g)"""
     try:
-        dy = info.get("dividendYield")
-        price = info.get("currentPrice") or info.get("regularMarketPrice")
-        beta = info.get("beta") or 1.0
-        growth = info.get("earningsGrowth") or info.get("revenueGrowth") or 0.03
-
-        if dy and price:
-            dps = dy * price
-            # CAPM simplificado: Ke = Rf + beta * prêmio
-            rf = 0.135       # Selic/CDI ~13.5%
-            premio = 0.05    # prêmio de risco BR
-            ke = rf + beta * premio
-            g = min(float(growth), ke - 0.01)  # g < ke obrigatório
-            if ke > g and dps > 0:
-                valor = dps / (ke - g)
-                return {"modelo": "Gordon (DDM)", "valor": round(valor, 2),
-                        "formula": "DPS / (Ke − g)",
-                        "inputs": {"DPS": round(dps, 2), "Ke": f"{ke*100:.1f}%", "g": f"{g*100:.1f}%"},
-                        "valido": True}
+        # DPS: prefere dividendRate (anual em R$), fallback yield*price
+        dps = info.get("dividendRate")
+        if not dps:
+            dy = info.get("dividendYield")
+            price = info.get("currentPrice") or info.get("regularMarketPrice")
+            if dy and price:
+                dps = float(dy) * float(price)
+        beta = float(info.get("beta") or 1.0)
+        growth = float(info.get("earningsGrowth") or info.get("revenueGrowth") or 0.03)
+        rf = 0.135
+        premio = 0.05
+        ke = rf + beta * premio
+        g = min(growth, ke - 0.01)
+        if dps and float(dps) > 0 and ke > g:
+            valor = float(dps) / (ke - g)
+            return {"modelo": "Gordon (DDM)", "valor": round(valor, 2),
+                    "formula": "DPS / (Ke − g)",
+                    "inputs": {"DPS": f"R$ {float(dps):.2f}", "Ke": f"{ke*100:.1f}%", "g": f"{g*100:.1f}%"},
+                    "valido": True}
     except Exception:
         pass
     return {"modelo": "Gordon (DDM)", "valor": None, "valido": False,
@@ -652,16 +699,18 @@ def valuation_gordon(info: dict) -> dict:
 def valuation_bazin(info: dict) -> dict:
     """Método Bazin: preço justo = DPA / 0.06 (yield mínimo 6%)"""
     try:
-        dy = info.get("dividendYield")
-        price = info.get("currentPrice") or info.get("regularMarketPrice")
-        if dy and price:
-            dpa = dy * price
-            if dpa > 0:
-                valor = dpa / 0.06
-                return {"modelo": "Bazin", "valor": round(valor, 2),
-                        "formula": "DPA / 6%",
-                        "inputs": {"DPA": round(dpa, 2), "Yield mínimo": "6%"},
-                        "valido": True}
+        dpa = info.get("dividendRate")
+        if not dpa:
+            dy = info.get("dividendYield")
+            price = info.get("currentPrice") or info.get("regularMarketPrice")
+            if dy and price:
+                dpa = float(dy) * float(price)
+        if dpa and float(dpa) > 0:
+            valor = float(dpa) / 0.06
+            return {"modelo": "Bazin", "valor": round(valor, 2),
+                    "formula": "DPA / 6%",
+                    "inputs": {"DPA anual": f"R$ {float(dpa):.2f}", "Yield mínimo": "6%"},
+                    "valido": True}
     except Exception:
         pass
     return {"modelo": "Bazin", "valor": None, "valido": False,
