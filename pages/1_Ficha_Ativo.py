@@ -45,7 +45,24 @@ with st.spinner(f"Carregando {ticker_input}..."):
     info = fetch_fundamentals(ticker_input)
 
 if df_raw.empty:
-    st.error(f"Não foi possível carregar dados para **{ticker_input}**. Verifique o ticker e tente novamente.")
+    import requests as _req
+    # Testa qual fonte falhou para dar mensagem útil
+    ua = {"User-Agent": "Mozilla/5.0"}
+    msgs = []
+    try:
+        r1 = _req.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker_input}?interval=1d&range=5d", headers=ua, timeout=10)
+        msgs.append(f"Yahoo query1: HTTP {r1.status_code}")
+    except Exception as e:
+        msgs.append(f"Yahoo query1: {e}")
+    try:
+        sym = ticker_input.replace(".SA","")
+        r2 = _req.get(f"https://brapi.dev/api/quote/{sym}?range=5d&interval=1d", timeout=10)
+        msgs.append(f"brapi: HTTP {r2.status_code}")
+    except Exception as e:
+        msgs.append(f"brapi: {e}")
+    st.error(f"Não foi possível carregar **{ticker_input}**.")
+    st.code("\n".join(msgs), language="text")
+    st.info("Clique em '🗑 Limpar cache' no sidebar e tente novamente.")
     st.stop()
 
 df = calc_all_indicators(df_raw)
