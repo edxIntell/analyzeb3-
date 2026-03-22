@@ -203,52 +203,80 @@ div[data-testid="stTextInput"] > div > div {
 @st.cache_data(ttl=60, show_spinner=False)
 def fetch_price_history(ticker: str, period: str = "1y") -> pd.DataFrame:
     symbol = ticker.upper().replace(".SA", "")
+    symbol_sa = symbol + ".SA"
     period_map = {"6mo": "6mo", "1y": "1y", "2y": "2y", "3y": "3y"}
     range_param = period_map.get(period, "1y")
+    headers_yf = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
-    # Try brapi.dev first
+    # Source 1 — brapi.dev
     try:
         url = f"{BRAPI_BASE}/quote/{symbol}?range={range_param}&interval=1d&fundamental=false"
-        resp = requests.get(url, timeout=15)
-        data = resp.json()
-        results = data.get("results", [])
-        if results:
-            r = results[0]
-            hist = r.get("historicalDataPrice") or []
-            # Also try to get current price if history is short
-            rows = []
-            for h in hist:
-                close_val = h.get("close") or h.get("adjustedClose")
-                if close_val is not None:
-                    try:
-                        date_val = pd.to_datetime(h["date"], unit="s") if isinstance(h["date"], (int, float)) else pd.to_datetime(h["date"])
-                        rows.append({
-                            "Date":   date_val,
-                            "Open":   h.get("open") or close_val,
-                            "High":   h.get("high") or close_val,
-                            "Low":    h.get("low") or close_val,
-                            "Close":  close_val,
-                            "Volume": h.get("volume") or 0,
-                        })
-                    except Exception:
-                        continue
-            if rows:
-                df = pd.DataFrame(rows).set_index("Date").sort_index()
-                df = df.dropna(subset=["Close"])
-                return df
+        resp = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        if resp.status_code == 200:
+            data = resp.json()
+            results = data.get("results", [])
+            if results:
+                hist = results[0].get("historicalDataPrice") or []
+                rows = []
+                for h in hist:
+                    close_val = h.get("close") or h.get("adjustedClose")
+                    if close_val is not None:
+                        try:
+                            date_val = pd.to_datetime(h["date"], unit="s") if isinstance(h["date"], (int, float)) else pd.to_datetime(h["date"])
+                            rows.append({"Date": date_val, "Open": h.get("open") or close_val,
+                                         "High": h.get("high") or close_val, "Low": h.get("low") or close_val,
+                                         "Close": close_val, "Volume": h.get("volume") or 0})
+                        except Exception:
+                            continue
+                if rows:
+                    df = pd.DataFrame(rows).set_index("Date").sort_index()
+                    return df.dropna(subset=["Close"])
     except Exception:
         pass
 
-    # Fallback: yfinance
+    # Source 2 — Yahoo Finance chart API (direto, sem yfinance lib)
+    try:
+        range_yf = {"6mo": "6mo", "1y": "1y", "2y": "2y", "3y": "5y"}.get(period, "1y")
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol_sa}?interval=1d&range={range_yf}"
+        resp = requests.get(url, headers=headers_yf, timeout=20)
+        if resp.status_code == 200:
+            result = resp.json().get("chart", {}).get("result", [])
+            if result:
+                r = result[0]
+                timestamps = r.get("timestamp", [])
+                quote = r.get("indicators", {}).get("quote", [{}])[0]
+                closes = quote.get("close", [])
+                opens  = quote.get("open", [])
+                highs  = quote.get("high", [])
+                lows   = quote.get("low", [])
+                vols   = quote.get("volume", [])
+                rows = []
+                for i, ts in enumerate(timestamps):
+                    c = closes[i] if i < len(closes) else None
+                    if c is not None:
+                        rows.append({
+                            "Date":   pd.to_datetime(ts, unit="s"),
+                            "Open":   (opens[i]  if i < len(opens)  else None) or c,
+                            "High":   (highs[i]  if i < len(highs)  else None) or c,
+                            "Low":    (lows[i]   if i < len(lows)   else None) or c,
+                            "Close":  c,
+                            "Volume": (vols[i]   if i < len(vols)   else None) or 0,
+                        })
+                if rows:
+                    df = pd.DataFrame(rows).set_index("Date").sort_index()
+                    return df.dropna(subset=["Close"])
+    except Exception:
+        pass
+
+    # Source 3 — yfinance lib fallback
     try:
         import yfinance as yf
-        df = yf.download(ticker, period=period, progress=False, threads=False, auto_adjust=True)
+        df = yf.download(symbol_sa, period=period, progress=False, threads=False, auto_adjust=True)
         if df is not None and not df.empty:
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
             df.columns = [str(c) for c in df.columns]
-            df = df.dropna(subset=["Close"])
-            return df
+            return df.dropna(subset=["Close"])
     except Exception:
         pass
 
