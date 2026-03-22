@@ -601,3 +601,193 @@ SAFE_TICKERS = [
     "BRKM5.SA", "UNIP6.SA", "SUZB3.SA", "KLBN11.SA", "CSNA3.SA",
     "GGBR4.SA", "USIM5.SA", "EMBR3.SA", "AZUL4.SA", "GOLL4.SA",
 ]
+
+
+# ─── VALUATION MODELS ──────────────────────────────────────────────────────────
+
+def valuation_graham(info: dict) -> dict:
+    """Fórmula de Graham: V = sqrt(22.5 * LPA * VPA)"""
+    try:
+        eps = info.get("trailingEps") or info.get("epsTrailingTwelveMonths")
+        bvps = info.get("bookValue")
+        if eps and bvps and eps > 0 and bvps > 0:
+            valor = (22.5 * eps * bvps) ** 0.5
+            return {"modelo": "Graham", "valor": round(valor, 2),
+                    "formula": "√(22.5 × LPA × VPA)",
+                    "inputs": {"LPA": round(eps, 2), "VPA": round(bvps, 2)},
+                    "valido": True}
+    except Exception:
+        pass
+    return {"modelo": "Graham", "valor": None, "valido": False,
+            "motivo": "LPA ou VPA indisponível"}
+
+
+def valuation_gordon(info: dict) -> dict:
+    """Modelo de Gordon (DDM): P = DPS / (Ke - g)"""
+    try:
+        dy = info.get("dividendYield")
+        price = info.get("currentPrice") or info.get("regularMarketPrice")
+        beta = info.get("beta") or 1.0
+        growth = info.get("earningsGrowth") or info.get("revenueGrowth") or 0.03
+
+        if dy and price:
+            dps = dy * price
+            # CAPM simplificado: Ke = Rf + beta * prêmio
+            rf = 0.135       # Selic/CDI ~13.5%
+            premio = 0.05    # prêmio de risco BR
+            ke = rf + beta * premio
+            g = min(float(growth), ke - 0.01)  # g < ke obrigatório
+            if ke > g and dps > 0:
+                valor = dps / (ke - g)
+                return {"modelo": "Gordon (DDM)", "valor": round(valor, 2),
+                        "formula": "DPS / (Ke − g)",
+                        "inputs": {"DPS": round(dps, 2), "Ke": f"{ke*100:.1f}%", "g": f"{g*100:.1f}%"},
+                        "valido": True}
+    except Exception:
+        pass
+    return {"modelo": "Gordon (DDM)", "valor": None, "valido": False,
+            "motivo": "Dividendo insuficiente ou empresa sem distribuição"}
+
+
+def valuation_bazin(info: dict) -> dict:
+    """Método Bazin: preço justo = DPA / 0.06 (yield mínimo 6%)"""
+    try:
+        dy = info.get("dividendYield")
+        price = info.get("currentPrice") or info.get("regularMarketPrice")
+        if dy and price:
+            dpa = dy * price
+            if dpa > 0:
+                valor = dpa / 0.06
+                return {"modelo": "Bazin", "valor": round(valor, 2),
+                        "formula": "DPA / 6%",
+                        "inputs": {"DPA": round(dpa, 2), "Yield mínimo": "6%"},
+                        "valido": True}
+    except Exception:
+        pass
+    return {"modelo": "Bazin", "valor": None, "valido": False,
+            "motivo": "Dividendo indisponível"}
+
+
+def valuation_pl_setor(info: dict) -> dict:
+    """Valuation por P/L setorial: usa P/L médio do setor como referência"""
+    try:
+        eps = info.get("trailingEps") or info.get("epsTrailingTwelveMonths")
+        sector = info.get("sector", "")
+        # P/L médio estimado por setor BR
+        pl_setor = {
+            "Financial Services": 9, "Financials": 9,
+            "Basic Materials": 8, "Materials": 8,
+            "Energy": 7, "Utilities": 12,
+            "Consumer Staples": 16, "Consumer Defensive": 16,
+            "Consumer Discretionary": 14, "Consumer Cyclical": 14,
+            "Industrials": 13, "Healthcare": 18,
+            "Technology": 20, "Communication Services": 12,
+            "Real Estate": 15,
+        }
+        pl_ref = pl_setor.get(sector, 12)
+        if eps and eps > 0:
+            valor = eps * pl_ref
+            return {"modelo": "P/L Setorial", "valor": round(valor, 2),
+                    "formula": f"LPA × P/L médio do setor",
+                    "inputs": {"LPA": round(eps, 2), "P/L setor": pl_ref, "Setor": sector or "Genérico"},
+                    "valido": True}
+    except Exception:
+        pass
+    return {"modelo": "P/L Setorial", "valor": None, "valido": False,
+            "motivo": "LPA indisponível"}
+
+
+def valuation_ev_ebitda(info: dict) -> dict:
+    """Valuation por EV/EBITDA: compara com múltiplo histórico de 7x"""
+    try:
+        ebitda = info.get("ebitda")
+        shares = info.get("sharesOutstanding")
+        debt = info.get("totalDebt") or 0
+        cash = info.get("totalCash") or 0
+        sector = info.get("sector", "")
+
+        ev_ref = {"Utilities": 9, "Energy": 6, "Financial Services": 10,
+                  "Technology": 15, "Consumer Staples": 12}.get(sector, 7)
+
+        if ebitda and shares and ebitda > 0 and shares > 0:
+            ev_justo = ebitda * ev_ref
+            equity_justo = ev_justo - debt + cash
+            valor = equity_justo / shares
+            return {"modelo": "EV/EBITDA", "valor": round(valor, 2),
+                    "formula": f"(EBITDA × {ev_ref}x − Dívida + Caixa) / Ações",
+                    "inputs": {"EBITDA": f"R$ {ebitda/1e9:.1f}B", "EV/EBITDA ref": f"{ev_ref}x"},
+                    "valido": True}
+    except Exception:
+        pass
+    return {"modelo": "EV/EBITDA", "valor": None, "valido": False,
+            "motivo": "EBITDA ou dados de dívida indisponíveis"}
+
+
+def valuation_dcf_simplificado(info: dict) -> dict:
+    """DCF simplificado: usa FCF por ação com crescimento em 2 estágios"""
+    try:
+        fcf = info.get("freeCashflow")
+        shares = info.get("sharesOutstanding")
+        beta = info.get("beta") or 1.0
+        growth_5a = min(float(info.get("earningsGrowth") or 0.05), 0.25)
+        growth_terminal = 0.04  # crescimento perpétuo conservador
+
+        if fcf and shares and fcf > 0 and shares > 0:
+            fcf_share = fcf / shares
+            rf = 0.135
+            premio = 0.05
+            wacc = rf + beta * premio
+
+            # Estágio 1: 5 anos com crescimento estimado
+            vp_fase1 = 0
+            fcf_t = fcf_share
+            for t in range(1, 6):
+                fcf_t *= (1 + growth_5a)
+                vp_fase1 += fcf_t / (1 + wacc) ** t
+
+            # Estágio 2: valor terminal
+            fcf_terminal = fcf_t * (1 + growth_terminal)
+            vt = fcf_terminal / (wacc - growth_terminal)
+            vp_terminal = vt / (1 + wacc) ** 5
+
+            valor = vp_fase1 + vp_terminal
+            return {"modelo": "DCF (2 estágios)", "valor": round(valor, 2),
+                    "formula": "VP(FCF 5a) + VP(Valor Terminal)",
+                    "inputs": {
+                        "FCF/ação": f"R$ {fcf_share:.2f}",
+                        "Crescimento 5a": f"{growth_5a*100:.1f}%",
+                        "WACC": f"{wacc*100:.1f}%",
+                        "g terminal": f"{growth_terminal*100:.1f}%"
+                    },
+                    "valido": True}
+    except Exception:
+        pass
+    return {"modelo": "DCF (2 estágios)", "valor": None, "valido": False,
+            "motivo": "Free Cash Flow indisponível"}
+
+
+def compute_valuation(info: dict) -> dict:
+    """Roda todos os modelos e retorna consenso."""
+    price = info.get("currentPrice") or info.get("regularMarketPrice")
+    modelos = [
+        valuation_graham(info),
+        valuation_gordon(info),
+        valuation_bazin(info),
+        valuation_pl_setor(info),
+        valuation_ev_ebitda(info),
+        valuation_dcf_simplificado(info),
+    ]
+    validos = [m for m in modelos if m["valido"] and m["valor"] and m["valor"] > 0]
+    consenso = round(sum(m["valor"] for m in validos) / len(validos), 2) if validos else None
+
+    upside = None
+    if consenso and price:
+        upside = round((consenso / float(price) - 1) * 100, 1)
+
+    return {
+        "preco_atual": price,
+        "consenso": consenso,
+        "upside_pct": upside,
+        "modelos": modelos,
+        "validos": len(validos),
+    }
