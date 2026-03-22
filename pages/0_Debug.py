@@ -1,50 +1,32 @@
 import streamlit as st
 import requests
-import pandas as pd
 
-st.title("Debug — Teste direto")
-ticker = st.text_input("Ticker", value="VALE3")
+st.title("Debug — Dividendos")
+ticker = st.text_input("Ticker", value="TAEE11")
 
-if st.button("Testar fetch completo"):
+if st.button("Inspecionar campos de dividendo"):
     symbol = ticker.upper().replace(".SA", "")
-    url = f"https://brapi.dev/api/quote/{symbol}?range=1y&interval=1d&fundamental=false"
     
-    try:
-        resp = requests.get(url, timeout=15)
-        data = resp.json()
-        results = data.get("results", [])
-        
-        if not results:
-            st.error("Sem results na resposta")
-            st.json(data)
-            st.stop()
-            
-        hist = results[0].get("historicalDataPrice") or []
-        st.write(f"Candles recebidos: {len(hist)}")
-        
-        rows = []
-        erros = []
-        for h in hist:
-            close_val = h.get("close") or h.get("adjustedClose")
-            if close_val is not None:
-                try:
-                    date_val = pd.to_datetime(h["date"], unit="s") if isinstance(h["date"], (int, float)) else pd.to_datetime(h["date"])
-                    rows.append({"Date": date_val, "Open": h.get("open") or close_val,
-                                 "High": h.get("high") or close_val, "Low": h.get("low") or close_val,
-                                 "Close": close_val, "Volume": h.get("volume") or 0})
-                except Exception as e:
-                    erros.append(str(e))
-        
-        if erros:
-            st.warning(f"Erros no parse: {erros[:3]}")
-        
-        if rows:
-            df = pd.DataFrame(rows).set_index("Date").sort_index()
-            st.success(f"DataFrame OK — {len(df)} linhas — último: {df.index[-1].date()} close={df['Close'].iloc[-1]:.2f}")
-            st.dataframe(df.tail(5))
-        else:
-            st.error("Nenhuma linha válida construída")
-            st.write("Primeiro candle raw:", hist[0] if hist else "vazio")
-            
-    except Exception as e:
-        st.error(f"Exceção: {type(e).__name__}: {e}")
+    # Sem fundamental
+    url1 = f"https://brapi.dev/api/quote/{symbol}?fundamental=false"
+    r1 = requests.get(url1, timeout=15).json()
+    res1 = (r1.get("results") or [{}])[0]
+    
+    # Com fundamental
+    url2 = f"https://brapi.dev/api/quote/{symbol}?fundamental=true"
+    r2 = requests.get(url2, timeout=15).json()
+    res2 = (r2.get("results") or [{}])[0]
+
+    st.subheader("Campos relevantes (sem fundamental)")
+    for k in ["dividendYield", "dividendsPerShare", "lastDividendValue", 
+              "regularMarketPrice", "currentPrice"]:
+        st.write(f"`{k}` →", res1.get(k, "❌ ausente"))
+
+    st.subheader("Campos relevantes (com fundamental=true)")
+    for k in ["dividendYield", "dividendsPerShare", "lastDividendValue",
+              "regularMarketPrice", "currentPrice", "trailingAnnualDividendRate",
+              "trailingAnnualDividendYield"]:
+        st.write(f"`{k}` →", res2.get(k, "❌ ausente"))
+
+    st.subheader("Todos os campos retornados (fundamental=true)")
+    st.json({k: v for k, v in res2.items() if v is not None and k != "historicalDataPrice"})
