@@ -103,18 +103,51 @@ tab_at, tab_af, tab_vl, tab_peers, tab_fw = st.tabs(["ANÁLISE TÉCNICA", "ANÁL
 # TAB 1 — ANÁLISE TÉCNICA
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_at:
-    # Quick metrics
-    ret1m = df["Return_1m"].iloc[-1] if "Return_1m" in df.columns else None
-    ret3m = df["Return_3m"].iloc[-1] if "Return_3m" in df.columns else None
-    ret6m = df["Return_6m"].iloc[-1] if "Return_6m" in df.columns else None
-    rsi_val = df["RSI"].iloc[-1] if "RSI" in df.columns else None
-    vol_val = df["Volatility_30d"].iloc[-1] if "Volatility_30d" in df.columns else None
+    # ── CONTROLES DE TIMEFRAME E INDICADORES ──
+    ctrl1, ctrl2, ctrl3 = st.columns([2, 2, 3])
+    with ctrl1:
+        timeframe = st.radio("Timeframe", ["Diário", "Semanal", "Mensal"],
+                             horizontal=True, key="tf_radio")
+    with ctrl2:
+        chart_type = st.radio("Tipo", ["Candle", "Linha"], horizontal=True, key="ct_radio")
+    with ctrl3:
+        indicators = st.multiselect("Indicadores",
+            ["MM20", "MM50", "MM200", "Bollinger", "VWAP"],
+            default=["MM20", "MM50", "Bollinger"], key="ind_ms")
 
-    c1, c2, c3, c4, c5 = st.columns(5)
+    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+
+    # ── RESAMPLE CONFORME TIMEFRAME ──
+    def resample_ohlcv(df_in, tf):
+        if tf == "Semanal":
+            rule = "W"
+        elif tf == "Mensal":
+            rule = "ME"
+        else:
+            return df_in.copy()
+        agg = {"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"}
+        agg = {k: v for k, v in agg.items() if k in df_in.columns}
+        return df_in.resample(rule).agg(agg).dropna(subset=["Close"])
+
+    df_chart = resample_ohlcv(df, timeframe)
+    df_chart = calc_all_indicators(df_chart)
+
+    # ── MÉTRICAS ──
     def fmt_ret(v):
-        if v is None or np.isnan(v): return "–", "neutral"
+        if v is None or (isinstance(v, float) and np.isnan(v)): return "–", "neutral"
         return f"{'+' if v>=0 else ''}{v:.1f}%", "up" if v>=0 else "down"
 
+    ret1m  = float(df_chart["Return_1m"].dropna().iloc[-1])  if "Return_1m"  in df_chart.columns and len(df_chart["Return_1m"].dropna())  > 0 else None
+    ret3m  = float(df_chart["Return_3m"].dropna().iloc[-1])  if "Return_3m"  in df_chart.columns and len(df_chart["Return_3m"].dropna())  > 0 else None
+    ret6m  = float(df_chart["Return_6m"].dropna().iloc[-1])  if "Return_6m"  in df_chart.columns and len(df_chart["Return_6m"].dropna())  > 0 else None
+    rsi_val= float(df_chart["RSI"].dropna().iloc[-1])        if "RSI"        in df_chart.columns and len(df_chart["RSI"].dropna())        > 0 else None
+    vol_val= float(df_chart["Volatility_30d"].dropna().iloc[-1]) if "Volatility_30d" in df_chart.columns and len(df_chart["Volatility_30d"].dropna()) > 0 else None
+
+    # Máxima e mínima do período visível
+    price_max = float(df_chart["High"].max()) if "High" in df_chart.columns else float(df_chart["Close"].max())
+    price_min = float(df_chart["Low"].min())  if "Low"  in df_chart.columns else float(df_chart["Close"].min())
+
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
     with c1:
         v, cls = fmt_ret(ret1m)
         st.markdown(render_metric("Retorno 1M", v, delta_class=cls), unsafe_allow_html=True)
@@ -125,95 +158,191 @@ with tab_at:
         v, cls = fmt_ret(ret6m)
         st.markdown(render_metric("Retorno 6M", v, delta_class=cls), unsafe_allow_html=True)
     with c4:
-        if rsi_val and not np.isnan(rsi_val):
-            rsi_cls = "down" if rsi_val > 70 else ("up" if rsi_val < 30 else "neutral")
+        if rsi_val:
+            rsi_cls  = "down" if rsi_val > 70 else ("up" if rsi_val < 30 else "neutral")
             rsi_note = "sobrecomprado" if rsi_val > 70 else ("sobrevendido" if rsi_val < 30 else "neutro")
             st.markdown(render_metric("RSI (14)", f"{rsi_val:.1f}", rsi_note, rsi_cls), unsafe_allow_html=True)
         else:
             st.markdown(render_metric("RSI (14)", "–"), unsafe_allow_html=True)
     with c5:
-        if vol_val and not np.isnan(vol_val):
-            st.markdown(render_metric("Volatilidade", f"{vol_val:.1f}%", "anualizada", "neutral"), unsafe_allow_html=True)
-        else:
-            st.markdown(render_metric("Volatilidade", "–"), unsafe_allow_html=True)
+        st.markdown(render_metric("Máx período", f"R$ {price_max:.2f}"), unsafe_allow_html=True)
+    with c6:
+        st.markdown(render_metric("Mín período", f"R$ {price_min:.2f}"), unsafe_allow_html=True)
 
-    st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
 
-    # ── MAIN CHART ──
+    # ── GRÁFICO PRINCIPAL ──
     fig = make_subplots(
         rows=3, cols=1,
         shared_xaxes=True,
-        row_heights=[0.6, 0.2, 0.2],
-        vertical_spacing=0.02
+        row_heights=[0.58, 0.18, 0.24],
+        vertical_spacing=0.015,
+        subplot_titles=("", "Volume", "RSI (14)"),
     )
 
-    # Candles
-    if "Open" in df.columns and "High" in df.columns and "Low" in df.columns:
+    # Candles ou Linha
+    if chart_type == "Candle" and all(c in df_chart.columns for c in ["Open","High","Low"]):
         fig.add_trace(go.Candlestick(
-            x=df.index, open=df["Open"], high=df["High"],
-            low=df["Low"], close=df["Close"],
+            x=df_chart.index, open=df_chart["Open"], high=df_chart["High"],
+            low=df_chart["Low"], close=df_chart["Close"],
             name="Preço",
-            increasing_line_color="#4af0c8", increasing_fillcolor="#4af0c8",
-            decreasing_line_color="#f05b5b", decreasing_fillcolor="#f05b5b",
-            line_width=1
+            increasing_line_color="#4af0c8", increasing_fillcolor="rgba(74,240,200,0.7)",
+            decreasing_line_color="#f05b5b", decreasing_fillcolor="rgba(240,91,91,0.7)",
+            line_width=1, whiskerwidth=0.8,
         ), row=1, col=1)
     else:
-        fig.add_trace(go.Scatter(x=df.index, y=df["Close"], line=dict(color="#4af0c8", width=1.5), name="Fechamento"), row=1, col=1)
+        fig.add_trace(go.Scatter(
+            x=df_chart.index, y=df_chart["Close"],
+            line=dict(color="#4af0c8", width=2),
+            fill="tozeroy", fillcolor="rgba(74,240,200,0.04)",
+            name="Fechamento",
+        ), row=1, col=1)
 
-    # Moving averages
-    for col, color, name_ma in [("MA20","#f5c842","MM20"), ("MA50","#c8f564","MM50"), ("MA200","#7b6cf6","MM200")]:
-        if col in df.columns:
-            fig.add_trace(go.Scatter(x=df.index, y=df[col], line=dict(color=color, width=1, dash="dot"),
-                                      name=name_ma, opacity=0.8), row=1, col=1)
+    # Médias móveis
+    ma_cfg = {"MM20": ("MA20","#f5c842",1.2), "MM50": ("MA50","#c8f564",1.2), "MM200": ("MA200","#7b6cf6",1.5)}
+    for ind_name, (col, color, width) in ma_cfg.items():
+        if ind_name in indicators and col in df_chart.columns:
+            s = df_chart[col].dropna()
+            fig.add_trace(go.Scatter(
+                x=s.index, y=s,
+                line=dict(color=color, width=width),
+                name=ind_name, opacity=0.9,
+            ), row=1, col=1)
 
     # Bollinger
-    if "BB_Upper" in df.columns:
-        fig.add_trace(go.Scatter(x=df.index, y=df["BB_Upper"], line=dict(color="#6b7080", width=0.5, dash="dash"),
-                                  name="BB Superior", showlegend=False), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df["BB_Lower"], line=dict(color="#6b7080", width=0.5, dash="dash"),
-                                  name="BB Inferior", fill="tonexty", fillcolor="rgba(107,112,128,0.05)",
-                                  showlegend=False), row=1, col=1)
+    if "Bollinger" in indicators and "BB_Upper" in df_chart.columns:
+        fig.add_trace(go.Scatter(
+            x=df_chart.index, y=df_chart["BB_Upper"],
+            line=dict(color="rgba(107,112,128,0.6)", width=1, dash="dot"),
+            name="BB+2σ", showlegend=True,
+        ), row=1, col=1)
+        fig.add_trace(go.Scatter(
+            x=df_chart.index, y=df_chart["BB_Lower"],
+            line=dict(color="rgba(107,112,128,0.6)", width=1, dash="dot"),
+            name="BB−2σ", fill="tonexty",
+            fillcolor="rgba(107,112,128,0.06)",
+            showlegend=True,
+        ), row=1, col=1)
+        # Linha central
+        fig.add_trace(go.Scatter(
+            x=df_chart.index, y=df_chart["BB_Mid"],
+            line=dict(color="rgba(107,112,128,0.35)", width=0.8),
+            name="BB mid", showlegend=False,
+        ), row=1, col=1)
 
-    # Volume
-    if "Volume" in df.columns:
-        colors_v = ["#4af0c8" if df["Return_1d"].iloc[i] >= 0 else "#f05b5b" for i in range(len(df))]
-        fig.add_trace(go.Bar(x=df.index, y=df["Volume"], name="Volume", marker_color=colors_v, opacity=0.7), row=2, col=1)
+    # VWAP (só no diário)
+    if "VWAP" in indicators and timeframe == "Diário" and "Volume" in df_chart.columns:
+        typical = (df_chart["High"] + df_chart["Low"] + df_chart["Close"]) / 3 if "High" in df_chart.columns else df_chart["Close"]
+        cum_tp_vol = (typical * df_chart["Volume"]).cumsum()
+        cum_vol    = df_chart["Volume"].cumsum()
+        vwap = cum_tp_vol / cum_vol.replace(0, np.nan)
+        fig.add_trace(go.Scatter(
+            x=df_chart.index, y=vwap,
+            line=dict(color="#f0a84a", width=1.5, dash="dashdot"),
+            name="VWAP",
+        ), row=1, col=1)
 
-    # RSI
-    if "RSI" in df.columns:
-        fig.add_trace(go.Scatter(x=df.index, y=df["RSI"], line=dict(color="#c8f564", width=1.5), name="RSI"), row=3, col=1)
-        fig.add_hline(y=70, line_dash="dot", line_color="#f05b5b", line_width=0.8, row=3, col=1)
-        fig.add_hline(y=30, line_dash="dot", line_color="#4af0c8", line_width=0.8, row=3, col=1)
+    # Volume com cores
+    if "Volume" in df_chart.columns:
+        ret_col = df_chart["Close"].pct_change().fillna(0)
+        vol_colors = ["rgba(74,240,200,0.6)" if r >= 0 else "rgba(240,91,91,0.6)" for r in ret_col]
+        fig.add_trace(go.Bar(
+            x=df_chart.index, y=df_chart["Volume"],
+            name="Volume", marker_color=vol_colors,
+            showlegend=False,
+        ), row=2, col=1)
+        # Média do volume
+        vol_ma = df_chart["Volume"].rolling(20).mean()
+        fig.add_trace(go.Scatter(
+            x=df_chart.index, y=vol_ma,
+            line=dict(color="#f5c842", width=1),
+            name="Vol MA20", showlegend=False,
+        ), row=2, col=1)
 
+    # RSI com zonas
+    if "RSI" in df_chart.columns:
+        rsi_s = df_chart["RSI"].dropna()
+        fig.add_trace(go.Scatter(
+            x=rsi_s.index, y=rsi_s,
+            line=dict(color="#c8f564", width=1.5),
+            name="RSI",
+        ), row=3, col=1)
+        # Zona sobrecomprada
+        fig.add_hrect(y0=70, y1=100, fillcolor="rgba(240,91,91,0.07)",
+                      line_width=0, row=3, col=1)
+        # Zona sobrevendida
+        fig.add_hrect(y0=0, y1=30, fillcolor="rgba(74,240,200,0.07)",
+                      line_width=0, row=3, col=1)
+        fig.add_hline(y=70, line_dash="dot", line_color="rgba(240,91,91,0.5)", line_width=1, row=3, col=1)
+        fig.add_hline(y=50, line_dash="dot", line_color="rgba(107,112,128,0.3)", line_width=0.8, row=3, col=1)
+        fig.add_hline(y=30, line_dash="dot", line_color="rgba(74,240,200,0.5)", line_width=1, row=3, col=1)
+
+    # Layout
     fig.update_layout(
-        height=620,
+        height=680,
         paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="#13161e",
+        plot_bgcolor="#0f1117",
         font=dict(family="DM Sans, sans-serif", color="#6b7080", size=11),
-        legend=dict(orientation="h", y=1.02, x=0, bgcolor="rgba(0,0,0,0)", font_size=11),
+        legend=dict(
+            orientation="h", y=1.02, x=0,
+            bgcolor="rgba(0,0,0,0)",
+            font=dict(size=11),
+            itemsizing="constant",
+        ),
         xaxis_rangeslider_visible=False,
-        margin=dict(l=0, r=0, t=10, b=0),
+        margin=dict(l=0, r=0, t=24, b=0),
+        hovermode="x unified",
+        hoverlabel=dict(bgcolor="#1a1e28", font_size=12, font_family="DM Mono, monospace"),
     )
+
+    # Eixos
+    axis_style = dict(gridcolor="#1e2130", showgrid=True, zeroline=False,
+                      tickfont=dict(size=10, color="#6b7080"))
     for i in range(1, 4):
-        fig.update_xaxes(gridcolor="#242836", showgrid=True, row=i, col=1)
-        fig.update_yaxes(gridcolor="#242836", showgrid=True, row=i, col=1)
+        fig.update_xaxes(**axis_style, row=i, col=1,
+                         showspikes=True, spikecolor="#4b5060",
+                         spikethickness=1, spikedash="dot")
+        fig.update_yaxes(**axis_style, row=i, col=1,
+                         showspikes=True, spikecolor="#4b5060",
+                         spikethickness=1, spikedash="dot")
 
-    st.plotly_chart(fig, use_container_width=True)
+    fig.update_yaxes(tickprefix="R$ ", row=1, col=1)
+    fig.update_yaxes(title_text="Vol", title_font_size=10, row=2, col=1)
+    fig.update_yaxes(title_text="RSI", title_font_size=10, range=[0,100], row=3, col=1)
 
-    # ── MACD chart ──
-    if "MACD" in df.columns:
-        st.markdown('<div class="section-tag">MACD</div>', unsafe_allow_html=True)
-        fig_macd = go.Figure()
-        fig_macd.add_trace(go.Scatter(x=df.index, y=df["MACD"], line=dict(color="#c8f564", width=1.5), name="MACD"))
-        fig_macd.add_trace(go.Scatter(x=df.index, y=df["MACD_Signal"], line=dict(color="#f5c842", width=1.5), name="Sinal"))
-        hist_colors = ["#4af0c8" if v >= 0 else "#f05b5b" for v in df["MACD_Hist"].fillna(0)]
-        fig_macd.add_trace(go.Bar(x=df.index, y=df["MACD_Hist"], marker_color=hist_colors, name="Histograma", opacity=0.8))
-        fig_macd.update_layout(height=200, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="#13161e",
-                                font=dict(family="DM Sans", color="#6b7080", size=11),
-                                legend=dict(orientation="h", bgcolor="rgba(0,0,0,0)"),
-                                margin=dict(l=0, r=0, t=10, b=0))
-        fig_macd.update_xaxes(gridcolor="#242836"); fig_macd.update_yaxes(gridcolor="#242836")
-        st.plotly_chart(fig_macd, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, config={
+        "displayModeBar": True,
+        "modeBarButtonsToRemove": ["lasso2d","select2d","autoScale2d"],
+        "displaylogo": False,
+        "toImageButtonOptions": {"format": "png", "filename": f"{ticker_input}_chart", "scale": 2},
+    })
+
+    # ── MACD ──
+    if "MACD" in df_chart.columns:
+        st.markdown('<div style="font-family:monospace;font-size:10px;letter-spacing:2px;color:#c8f564;text-transform:uppercase;margin:4px 0 8px">MACD (12, 26, 9)</div>', unsafe_allow_html=True)
+        fig_macd = make_subplots(rows=1, cols=1)
+        macd_s = df_chart["MACD"].dropna()
+        sig_s  = df_chart["MACD_Signal"].dropna()
+        hist_s = df_chart["MACD_Hist"].dropna()
+        hist_colors = ["rgba(74,240,200,0.7)" if v >= 0 else "rgba(240,91,91,0.7)" for v in hist_s]
+        fig_macd.add_trace(go.Bar(x=hist_s.index, y=hist_s, marker_color=hist_colors,
+                                   name="Histograma", showlegend=False))
+        fig_macd.add_trace(go.Scatter(x=macd_s.index, y=macd_s,
+                                       line=dict(color="#c8f564", width=1.5), name="MACD"))
+        fig_macd.add_trace(go.Scatter(x=sig_s.index, y=sig_s,
+                                       line=dict(color="#f5c842", width=1.5), name="Sinal"))
+        fig_macd.add_hline(y=0, line_color="rgba(107,112,128,0.4)", line_width=0.8)
+        fig_macd.update_layout(
+            height=180, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="#0f1117",
+            font=dict(family="DM Sans", color="#6b7080", size=11),
+            legend=dict(orientation="h", bgcolor="rgba(0,0,0,0)", font_size=11),
+            margin=dict(l=0, r=0, t=4, b=0),
+            hovermode="x unified",
+        )
+        fig_macd.update_xaxes(gridcolor="#1e2130", showspikes=True, spikecolor="#4b5060",
+                               spikethickness=1, spikedash="dot")
+        fig_macd.update_yaxes(gridcolor="#1e2130")
+        st.plotly_chart(fig_macd, use_container_width=True, config={"displayModeBar": False})
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 2 — ANÁLISE FUNDAMENTALISTA
