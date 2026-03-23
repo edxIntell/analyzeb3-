@@ -220,10 +220,11 @@ def _brapi_get(path: str, params: dict = {}) -> dict:
 
 def fetch_price_history(ticker: str, period: str = "1y") -> pd.DataFrame:
     symbol = ticker.upper().replace(".SA", "")
-    range_map = {"6mo": "6mo", "1y": "1y", "2y": "2y", "3y": "3y"}
+    # Plano gratuito brapi: apenas 1d, 5d, 1mo, 3mo
+    range_map = {"6mo": "3mo", "1y": "3mo", "2y": "3mo", "3y": "3mo"}
     try:
         data = _brapi_get(f"/quote/{symbol}", {
-            "range": range_map.get(period, "1y"),
+            "range": range_map.get(period, "3mo"),
             "interval": "1d",
             "fundamental": "false",
         })
