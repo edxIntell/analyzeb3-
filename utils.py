@@ -226,7 +226,6 @@ def fetch_price_history(ticker: str, period: str = "1y") -> pd.DataFrame:
             "range": range_map.get(period, "1y"),
             "interval": "1d",
             "fundamental": "false",
-            "history": "true",
         })
         results = data.get("results", [])
         if not results:
