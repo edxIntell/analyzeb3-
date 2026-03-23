@@ -90,61 +90,7 @@ with st.spinner(f"Carregando {ticker_input}..."):
         st.error(f"Não foi possível carregar **{ticker_input}**")
         st.code(_err or "erro desconhecido")
         st.stop()
-    # fetch fundamentals inline
-    _sym2 = ticker_input.upper().replace(".SA","")
-    _token2 = st.secrets.get("BRAPI_TOKEN","")
-    _url2 = f"https://brapi.dev/api/quote/{_sym2}"
-    _prm2 = {"fundamental": "true"}
-    if _token2: _prm2["token"] = _token2
-    try:
-        _r2   = _rq.get(_url2, params=_prm2, timeout=20)
-        _d2   = _r2.json()
-        _res2 = _d2.get("results",[])
-        if _res2:
-            _r0 = _res2[0]
-            def _g(k, dv=None): return _r0.get(k, dv)
-            info = {
-                "longName":           _g("longName") or _g("shortName", _sym2),
-                "shortName":          _g("shortName", _sym2),
-                "sector":             _g("sector",""),
-                "industry":           _g("industry",""),
-                "longBusinessSummary":_g("longBusinessSummary",""),
-                "currentPrice":       _g("regularMarketPrice"),
-                "regularMarketPrice": _g("regularMarketPrice"),
-                "marketCap":          _g("marketCap"),
-                "beta":               _g("beta"),
-                "trailingPE":         _g("trailingPE") or _g("priceEarnings"),
-                "forwardPE":          _g("forwardPE"),
-                "priceToBook":        _g("priceToBook"),
-                "enterpriseToEbitda": _g("enterpriseToEbitda"),
-                "enterpriseToRevenue":_g("enterpriseToRevenue"),
-                "priceToSalesTrailing12Months": _g("priceToSalesTrailing12Months"),
-                "trailingEps":        _g("epsTrailingTwelveMonths") or _g("earningsPerShare"),
-                "bookValue":          _g("bookValue"),
-                "dividendYield":      _g("dividendYield") or _g("trailingAnnualDividendYield"),
-                "dividendRate":       _g("dividendRate") or _g("trailingAnnualDividendRate"),
-                "lastDividendValue":  _g("lastDividendValue") or _g("dividendRate"),
-                "payoutRatio":        _g("payoutRatio"),
-                "returnOnEquity":     _g("returnOnEquity"),
-                "returnOnAssets":     _g("returnOnAssets"),
-                "profitMargins":      _g("profitMargins"),
-                "grossMargins":       _g("grossMargins"),
-                "operatingMargins":   _g("operatingMargins"),
-                "revenueGrowth":      _g("revenueGrowth"),
-                "earningsGrowth":     _g("earningsGrowth"),
-                "debtToEquity":       _g("debtToEquity"),
-                "currentRatio":       _g("currentRatio"),
-                "totalDebt":          _g("totalDebt"),
-                "totalCash":          _g("totalCash"),
-                "freeCashflow":       _g("freeCashflow"),
-                "ebitda":             _g("ebitda"),
-                "sharesOutstanding":  _g("sharesOutstanding"),
-            }
-            info = {k:v for k,v in info.items() if v is not None}
-        else:
-            info = {}
-    except Exception:
-        info = {}
+    info = fetch_fundamentals(ticker_input)
 
 df = calc_all_indicators(df_raw)
 close = df["Close"]
