@@ -261,6 +261,18 @@ def fetch_price_history(ticker: str, period: str = "1y") -> pd.DataFrame:
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_fundamentals(ticker: str) -> dict:
+    # Tenta yfinance primeiro (funciona localmente)
+    try:
+        import yfinance as yf
+        symbol_sa = ticker if ticker.endswith(".SA") else ticker + ".SA"
+        t = yf.Ticker(symbol_sa)
+        yinfo = t.info or {}
+        if yinfo.get("regularMarketPrice") or yinfo.get("currentPrice"):
+            return yinfo
+    except Exception:
+        pass
+
+    # Fallback brapi
     symbol = ticker.upper().replace(".SA", "")
     info   = {}
     try:
