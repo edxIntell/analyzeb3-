@@ -40,36 +40,55 @@ with st.sidebar:
     st.page_link("pages/3_Screener.py", label="Screener")
 
 # ─── LOAD DATA ────────────────────────────────────────────────────────────────
-with st.spinner(f"Carregando {ticker_input}..."):
-    # Testa brapi diretamente para mostrar erro real
-    import requests as _rq
-    _symbol = ticker_input.upper().replace(".SA","")
+# ── FETCH INLINE (evita cache de módulo) ─────────────────────────────────────
+import requests as _rq
+import pandas as _pd
+
+def _load_prices(tkr, prd):
+    sym   = tkr.upper().replace(".SA","")
+    token = st.secrets.get("BRAPI_TOKEN","")
+    rng   = {"6mo":"3mo","1y":"3mo","2y":"3mo","3y":"3mo"}.get(prd,"3mo")
+    url   = f"https://brapi.dev/api/quote/{sym}"
+    prm   = {"range": rng, "interval": "1d", "fundamental": "false"}
+    if token:
+        prm["token"] = token
     try:
-        _token = st.secrets.get("BRAPI_TOKEN","")
-        _url = f"https://brapi.dev/api/quote/{_symbol}"
-        _range = {"6mo":"3mo","1y":"3mo","2y":"3mo","3y":"3mo"}.get(period,"3mo")
-        _params = {"range": _range, "interval": "1d", "fundamental": "false"}
-        if _token: _params["token"] = _token
-        _r = _rq.get(_url, params=_params, timeout=20)
-        _data = _r.json()
-        _results = _data.get("results", [])
-        _hist = (_results[0].get("historicalDataPrice") or []) if _results else []
-        if not _hist:
-            st.error(f"brapi retornou sem histórico para {_symbol}")
-            st.code(f"status={_r.status_code}\ntoken={'sim' if _token else 'NÃO'}\nresults={len(_results)}\nresposta={str(_data)[:400]}")
-            st.stop()
-    except Exception as _e:
-        st.error(f"Erro na requisição brapi: {_e}")
+        r    = _rq.get(url, params=prm, timeout=20)
+        data = r.json()
+        if r.status_code != 200:
+            return None, f"HTTP {r.status_code}: {data.get('message','')}"
+        results = data.get("results",[])
+        if not results:
+            return None, f"sem results: {str(data)[:200]}"
+        hist = results[0].get("historicalDataPrice") or []
+        if not hist:
+            return None, f"historicalDataPrice vazio. keys={list(results[0].keys())}"
+        rows = []
+        for h in hist:
+            c = h.get("close") or h.get("adjustedClose")
+            if c is None: continue
+            try:
+                d = (_pd.to_datetime(h["date"], unit="s")
+                     if isinstance(h["date"],(int,float))
+                     else _pd.to_datetime(h["date"]))
+                rows.append({"Date":d,"Open":h.get("open") or c,
+                             "High":h.get("high") or c,"Low":h.get("low") or c,
+                             "Close":c,"Volume":h.get("volume") or 0})
+            except: continue
+        if not rows:
+            return None, f"nenhuma row válida de {len(hist)} candles. ex={hist[0]}"
+        df = _pd.DataFrame(rows).set_index("Date").sort_index()
+        return df.dropna(subset=["Close"]), None
+    except Exception as e:
+        return None, f"{type(e).__name__}: {e}"
+
+with st.spinner(f"Carregando {ticker_input}..."):
+    df_raw, _err = _load_prices(ticker_input, period)
+    if df_raw is None or df_raw.empty:
+        st.error(f"Não foi possível carregar **{ticker_input}**")
+        st.code(_err or "erro desconhecido")
         st.stop()
-
-    df_raw = fetch_price_history(ticker_input, period)
     info = fetch_fundamentals(ticker_input)
-
-if df_raw.empty:
-    err = st.session_state.get("_fetch_error", "sem detalhe")
-    st.error(f"fetch_price_history retornou vazio para {ticker_input}")
-    st.code(err)
-    st.stop()
 
 df = calc_all_indicators(df_raw)
 close = df["Close"]
