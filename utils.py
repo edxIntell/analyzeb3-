@@ -262,7 +262,10 @@ def fetch_price_history(ticker: str, period: str = "1y") -> pd.DataFrame:
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_fundamentals(ticker: str) -> dict:
     symbol_av = ticker.upper().replace(".SA", "") + ".SAO"
-    key       = _av_key()
+    try:
+        key = st.secrets["ALPHAVANTAGE_KEY"]
+    except Exception:
+        key = "demo"
     info      = {}
 
     # Alpha Vantage OVERVIEW — dados fundamentalistas completos
