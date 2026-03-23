@@ -259,13 +259,78 @@ def fetch_price_history(ticker: str, period: str = "1y") -> pd.DataFrame:
         return pd.DataFrame()
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False)
 def fetch_fundamentals(ticker: str) -> dict:
-    # Tenta yfinance primeiro (funciona localmente)
+    symbol_av = ticker.upper().replace(".SA", "") + ".SAO"
+    key       = _av_key()
+    info      = {}
+
+    # Alpha Vantage OVERVIEW — dados fundamentalistas completos
+    try:
+        r    = requests.get("https://www.alphavantage.co/query",
+                            params={"function": "OVERVIEW", "symbol": symbol_av, "apikey": key},
+                            timeout=20)
+        d    = r.json()
+        if d.get("Symbol"):
+            def _f(k): 
+                v = d.get(k)
+                try: return float(v) if v and v != "None" else None
+                except: return None
+
+            info["longName"]            = d.get("Name", ticker)
+            info["shortName"]           = d.get("Name", ticker)
+            info["sector"]              = d.get("Sector", "")
+            info["industry"]            = d.get("Industry", "")
+            info["longBusinessSummary"] = d.get("Description", "")
+            info["marketCap"]           = _f("MarketCapitalization")
+            info["trailingPE"]          = _f("TrailingPE") or _f("PERatio")
+            info["forwardPE"]           = _f("ForwardPE")
+            info["priceToBook"]         = _f("PriceToBookRatio")
+            info["enterpriseToEbitda"]  = _f("EVToEBITDA")
+            info["enterpriseToRevenue"] = _f("EVToRevenue")
+            info["priceToSalesTrailing12Months"] = _f("PriceToSalesRatioTTM")
+            info["trailingEps"]         = _f("EPS")
+            info["bookValue"]           = _f("BookValue")
+            info["dividendYield"]       = _f("DividendYield")
+            info["dividendRate"]        = _f("DividendPerShare")
+            info["lastDividendValue"]   = _f("DividendPerShare")
+            info["payoutRatio"]         = _f("PayoutRatio")
+            info["returnOnEquity"]      = _f("ReturnOnEquityTTM")
+            info["returnOnAssets"]      = _f("ReturnOnAssetsTTM")
+            info["profitMargins"]       = _f("ProfitMargin")
+            info["grossMargins"]        = _f("GrossProfitTTM")
+            info["operatingMargins"]    = _f("OperatingMarginTTM")
+            info["revenueGrowth"]       = _f("QuarterlyRevenueGrowthYOY")
+            info["earningsGrowth"]      = _f("QuarterlyEarningsGrowthYOY")
+            info["debtToEquity"]        = _f("DebtToEquityRatio")
+            info["beta"]                = _f("Beta")
+            info["sharesOutstanding"]   = _f("SharesOutstanding")
+            info["ebitda"]              = _f("EBITDA")
+            info["freeCashflow"]        = _f("FreeCashflow") or _f("OperatingCashflowTTM")
+            info["totalDebt"]           = _f("TotalDebt") or _f("LongTermDebtNetCapitalization")
+            info["currentRatio"]        = _f("CurrentRatio")
+            info["totalCash"]           = _f("CashAndCashEquivalentsAtCarryingValue")
+            # Preço atual via GLOBAL_QUOTE
+            try:
+                rq = requests.get("https://www.alphavantage.co/query",
+                                  params={"function":"GLOBAL_QUOTE","symbol":symbol_av,"apikey":key},
+                                  timeout=10)
+                gq = rq.json().get("Global Quote",{})
+                price = gq.get("05. price")
+                if price:
+                    info["currentPrice"]       = float(price)
+                    info["regularMarketPrice"] = float(price)
+            except Exception:
+                pass
+            return {k: v for k, v in info.items() if v is not None}
+    except Exception:
+        pass
+
+    # Fallback yfinance (local)
     try:
         import yfinance as yf
         symbol_sa = ticker if ticker.endswith(".SA") else ticker + ".SA"
-        t = yf.Ticker(symbol_sa)
+        t     = yf.Ticker(symbol_sa)
         yinfo = t.info or {}
         if yinfo.get("regularMarketPrice") or yinfo.get("currentPrice"):
             return yinfo
