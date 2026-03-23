@@ -41,12 +41,31 @@ with st.sidebar:
 
 # ─── LOAD DATA ────────────────────────────────────────────────────────────────
 with st.spinner(f"Carregando {ticker_input}..."):
+    # Testa brapi diretamente para mostrar erro real
+    import requests as _rq
+    _symbol = ticker_input.upper().replace(".SA","")
+    try:
+        _token = st.secrets.get("BRAPI_TOKEN","")
+        _url = f"https://brapi.dev/api/quote/{_symbol}"
+        _params = {"range": period, "interval": "1d", "fundamental": "false"}
+        if _token: _params["token"] = _token
+        _r = _rq.get(_url, params=_params, timeout=20)
+        _data = _r.json()
+        _results = _data.get("results", [])
+        _hist = (_results[0].get("historicalDataPrice") or []) if _results else []
+        if not _hist:
+            st.error(f"brapi retornou sem histórico para {_symbol}")
+            st.code(f"status={_r.status_code}\ntoken={'sim' if _token else 'NÃO'}\nresults={len(_results)}\nresposta={str(_data)[:400]}")
+            st.stop()
+    except Exception as _e:
+        st.error(f"Erro na requisição brapi: {_e}")
+        st.stop()
+
     df_raw = fetch_price_history(ticker_input, period)
     info = fetch_fundamentals(ticker_input)
 
 if df_raw.empty:
-    st.error(f"Não foi possível carregar dados para **{ticker_input}**.")
-    st.info("Verifique se o ticker está correto (ex: PETR4, VALE3, BRKM5) e tente novamente. Se o erro persistir, verifique o token BRAPI_TOKEN nos Secrets.")
+    st.error(f"fetch_price_history retornou vazio para {ticker_input}")
     st.stop()
 
 df = calc_all_indicators(df_raw)
