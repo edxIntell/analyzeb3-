@@ -66,7 +66,9 @@ with st.spinner(f"Carregando {ticker_input}..."):
     info = fetch_fundamentals(ticker_input)
 
 if df_raw.empty:
+    err = st.session_state.get("_fetch_error", "sem detalhe")
     st.error(f"fetch_price_history retornou vazio para {ticker_input}")
+    st.code(err)
     st.stop()
 
 df = calc_all_indicators(df_raw)
