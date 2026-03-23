@@ -3,8 +3,10 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import sys, os
+import sys, os, importlib
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+import utils as _utils_mod
+importlib.reload(_utils_mod)
 from utils import (
     STYLE, fetch_price_history, fetch_fundamentals,
     calc_all_indicators, compute_all_scores,
