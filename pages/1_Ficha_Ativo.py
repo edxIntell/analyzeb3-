@@ -47,7 +47,8 @@ with st.spinner(f"Carregando {ticker_input}..."):
     try:
         _token = st.secrets.get("BRAPI_TOKEN","")
         _url = f"https://brapi.dev/api/quote/{_symbol}"
-        _params = {"range": period, "interval": "1d", "fundamental": "false"}
+        _range = {"6mo":"3mo","1y":"3mo","2y":"3mo","3y":"3mo"}.get(period,"3mo")
+        _params = {"range": _range, "interval": "1d", "fundamental": "false"}
         if _token: _params["token"] = _token
         _r = _rq.get(_url, params=_params, timeout=20)
         _data = _r.json()
