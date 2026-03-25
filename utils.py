@@ -261,90 +261,80 @@ def fetch_price_history(ticker: str, period: str = "1y") -> pd.DataFrame:
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_fundamentals(ticker: str) -> dict:
-    symbol_av = ticker.upper().replace(".SA", "") + ".SAO"
-    try:
-        key = st.secrets["ALPHAVANTAGE_KEY"]
-    except Exception:
-        key = "demo"
-    info      = {}
+    symbol = ticker.upper() if ticker.endswith(".SA") else ticker.upper() + ".SA"
+    info   = {}
 
-    # Alpha Vantage OVERVIEW — dados fundamentalistas completos
+    # Yahoo Finance quoteSummary via webscraping (requests direto, sem lib yfinance)
     try:
-        r    = requests.get("https://www.alphavantage.co/query",
-                            params={"function": "OVERVIEW", "symbol": symbol_av, "apikey": key},
-                            timeout=20)
-        d    = r.json()
-        if d.get("Symbol"):
-            def _f(k): 
-                v = d.get(k)
-                try: return float(v) if v and v != "None" else None
-                except: return None
+        modules = "summaryDetail,defaultKeyStatistics,financialData,summaryProfile,price"
+        url     = f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}?modules={modules}"
+        headers = {
+            "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+            "Accept":          "application/json",
+            "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+            "Referer":         "https://finance.yahoo.com/",
+        }
+        r = requests.get(url, headers=headers, timeout=20)
+        if r.status_code == 200:
+            result = r.json().get("quoteSummary", {}).get("result", [])
+            if result:
+                d   = result[0]
+                sd  = d.get("summaryDetail", {})
+                ks  = d.get("defaultKeyStatistics", {})
+                fd  = d.get("financialData", {})
+                pr  = d.get("price", {})
+                sp  = d.get("summaryProfile", {})
 
-            info["longName"]            = d.get("Name", ticker)
-            info["shortName"]           = d.get("Name", ticker)
-            info["sector"]              = d.get("Sector", "")
-            info["industry"]            = d.get("Industry", "")
-            info["longBusinessSummary"] = d.get("Description", "")
-            info["marketCap"]           = _f("MarketCapitalization")
-            info["trailingPE"]          = _f("TrailingPE") or _f("PERatio")
-            info["forwardPE"]           = _f("ForwardPE")
-            info["priceToBook"]         = _f("PriceToBookRatio")
-            info["enterpriseToEbitda"]  = _f("EVToEBITDA")
-            info["enterpriseToRevenue"] = _f("EVToRevenue")
-            info["priceToSalesTrailing12Months"] = _f("PriceToSalesRatioTTM")
-            info["trailingEps"]         = _f("EPS")
-            info["bookValue"]           = _f("BookValue")
-            info["dividendYield"]       = _f("DividendYield")
-            info["dividendRate"]        = _f("DividendPerShare")
-            info["lastDividendValue"]   = _f("DividendPerShare")
-            info["payoutRatio"]         = _f("PayoutRatio")
-            info["returnOnEquity"]      = _f("ReturnOnEquityTTM")
-            info["returnOnAssets"]      = _f("ReturnOnAssetsTTM")
-            info["profitMargins"]       = _f("ProfitMargin")
-            info["grossMargins"]        = _f("GrossProfitTTM")
-            info["operatingMargins"]    = _f("OperatingMarginTTM")
-            info["revenueGrowth"]       = _f("QuarterlyRevenueGrowthYOY")
-            info["earningsGrowth"]      = _f("QuarterlyEarningsGrowthYOY")
-            info["debtToEquity"]        = _f("DebtToEquityRatio")
-            info["beta"]                = _f("Beta")
-            info["sharesOutstanding"]   = _f("SharesOutstanding")
-            info["ebitda"]              = _f("EBITDA")
-            info["freeCashflow"]        = _f("FreeCashflow") or _f("OperatingCashflowTTM")
-            info["totalDebt"]           = _f("TotalDebt") or _f("LongTermDebtNetCapitalization")
-            info["currentRatio"]        = _f("CurrentRatio")
-            info["totalCash"]           = _f("CashAndCashEquivalentsAtCarryingValue")
-            # Preço atual via GLOBAL_QUOTE
-            try:
-                rq = requests.get("https://www.alphavantage.co/query",
-                                  params={"function":"GLOBAL_QUOTE","symbol":symbol_av,"apikey":key},
-                                  timeout=10)
-                gq = rq.json().get("Global Quote",{})
-                price = gq.get("05. price")
-                if price:
-                    info["currentPrice"]       = float(price)
-                    info["regularMarketPrice"] = float(price)
-            except Exception:
-                pass
-            return {k: v for k, v in info.items() if v is not None}
-    except Exception:
-        pass
+                def raw(obj, k):
+                    v = obj.get(k)
+                    if isinstance(v, dict): return v.get("raw")
+                    return v
 
-    # Fallback yfinance (local)
-    try:
-        import yfinance as yf
-        symbol_sa = ticker if ticker.endswith(".SA") else ticker + ".SA"
-        t     = yf.Ticker(symbol_sa)
-        yinfo = t.info or {}
-        if yinfo.get("regularMarketPrice") or yinfo.get("currentPrice"):
-            return yinfo
+                info["longName"]            = pr.get("longName") or pr.get("shortName", symbol)
+                info["shortName"]           = pr.get("shortName", symbol)
+                info["sector"]              = sp.get("sector", "")
+                info["industry"]            = sp.get("industry", "")
+                info["longBusinessSummary"] = sp.get("longBusinessSummary", "")
+                info["currentPrice"]        = raw(pr, "regularMarketPrice")
+                info["regularMarketPrice"]  = raw(pr, "regularMarketPrice")
+                info["marketCap"]           = raw(pr, "marketCap")
+                info["beta"]                = raw(ks, "beta") or raw(sd, "beta")
+                info["trailingPE"]          = raw(sd, "trailingPE")
+                info["forwardPE"]           = raw(sd, "forwardPE")
+                info["priceToBook"]         = raw(ks, "priceToBook")
+                info["enterpriseToEbitda"]  = raw(ks, "enterpriseToEbitda")
+                info["enterpriseToRevenue"] = raw(ks, "enterpriseToRevenue")
+                info["priceToSalesTrailing12Months"] = raw(sd, "priceToSalesTrailing12Months")
+                info["trailingEps"]         = raw(ks, "trailingEps")
+                info["bookValue"]           = raw(ks, "bookValue")
+                info["dividendYield"]       = raw(sd, "dividendYield") or raw(sd, "trailingAnnualDividendYield")
+                info["dividendRate"]        = raw(sd, "dividendRate") or raw(sd, "trailingAnnualDividendRate")
+                info["lastDividendValue"]   = raw(ks, "lastDividendValue") or raw(sd, "dividendRate")
+                info["payoutRatio"]         = raw(sd, "payoutRatio")
+                info["returnOnEquity"]      = raw(fd, "returnOnEquity")
+                info["returnOnAssets"]      = raw(fd, "returnOnAssets")
+                info["profitMargins"]       = raw(fd, "profitMargins")
+                info["grossMargins"]        = raw(fd, "grossMargins")
+                info["operatingMargins"]    = raw(fd, "operatingMargins")
+                info["revenueGrowth"]       = raw(fd, "revenueGrowth")
+                info["earningsGrowth"]      = raw(fd, "earningsGrowth")
+                info["debtToEquity"]        = raw(ks, "debtToEquity")
+                info["currentRatio"]        = raw(fd, "currentRatio")
+                info["totalDebt"]           = raw(fd, "totalDebt")
+                info["totalCash"]           = raw(fd, "totalCash")
+                info["freeCashflow"]        = raw(fd, "freeCashflow")
+                info["ebitda"]              = raw(fd, "ebitda")
+                info["sharesOutstanding"]   = raw(ks, "sharesOutstanding")
+                cleaned = {k: v for k, v in info.items() if v is not None}
+                if cleaned.get("currentPrice"):
+                    return cleaned
     except Exception:
         pass
 
     # Fallback brapi
-    symbol = ticker.upper().replace(".SA", "")
-    info   = {}
+    symbol_br = ticker.upper().replace(".SA", "")
     try:
-        data = _brapi_get(f"/quote/{symbol}", {"fundamental": "true"})
+        data = _brapi_get(f"/quote/{symbol_br}", {"fundamental": "true"})
         results = data.get("results", [])
         if not results:
             return {}
