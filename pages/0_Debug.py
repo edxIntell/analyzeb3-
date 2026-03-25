@@ -1,29 +1,35 @@
 import streamlit as st
 import requests
-import pandas as pd
 
-st.title("Debug — Alpha Vantage")
-ticker = st.text_input("Ticker", value="BRKM5")
+st.title("Debug — Yahoo quoteSummary webscraping")
+ticker = st.text_input("Ticker", value="BRKM5.SA")
 
-if st.button("Testar Alpha Vantage com chave"):
-    key = st.secrets.get("ALPHAVANTAGE_KEY", "")
-    if not key:
-        st.error("ALPHAVANTAGE_KEY não encontrada nos Secrets!")
-        st.stop()
-    st.success(f"Chave encontrada: {key[:6]}...")
-
-    symbol = ticker.upper().replace(".SA","") + ".SAO"
-    url = "https://www.alphavantage.co/query"
-    params = {"function": "TIME_SERIES_DAILY", "symbol": symbol,
-              "outputsize": "compact", "apikey": key}
-    r = requests.get(url, params=params, timeout=20)
+if st.button("Testar quoteSummary"):
+    symbol  = ticker.upper() if ticker.endswith(".SA") else ticker.upper() + ".SA"
+    modules = "summaryDetail,defaultKeyStatistics,financialData,summaryProfile,price"
+    url     = f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}?modules={modules}"
+    headers = {
+        "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+        "Accept":          "application/json",
+        "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+        "Referer":         "https://finance.yahoo.com/",
+    }
+    r = requests.get(url, headers=headers, timeout=20)
     st.write("Status:", r.status_code)
-    data = r.json()
-    ts = data.get("Time Series (Daily)")
-    if ts:
-        dates = sorted(ts.keys(), reverse=True)
-        st.success(f"OK — {len(dates)} dias. Último: {dates[0]}")
-        st.write(ts[dates[0]])
+    if r.status_code == 200:
+        result = r.json().get("quoteSummary", {}).get("result", [])
+        if result:
+            pr = result[0].get("price", {})
+            fd = result[0].get("financialData", {})
+            def raw(obj, k):
+                v = obj.get(k)
+                return v.get("raw") if isinstance(v, dict) else v
+            st.success(f"OK! Nome: {pr.get('longName')} | Preço: {raw(pr,'regularMarketPrice')}")
+            st.write("ROE:", raw(fd,"returnOnEquity"))
+            st.write("Margem:", raw(fd,"profitMargins"))
+            st.write("DY:", result[0].get("summaryDetail",{}).get("dividendYield",{}).get("raw"))
+        else:
+            st.error("Sem result")
+            st.json(r.json())
     else:
-        st.error("Sem Time Series")
-        st.json(data)
+        st.error(r.text[:300])
